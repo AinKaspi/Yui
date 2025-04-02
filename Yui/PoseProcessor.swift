@@ -1,4 +1,5 @@
 import MediaPipeTasksVision
+import os.log
 
 class PoseProcessor {
     
@@ -11,7 +12,7 @@ class PoseProcessor {
     
     func processPoseLandmarks(_ result: PoseLandmarkerResult) {
         guard let landmarks = result.landmarks.first else {
-            print("PoseProcessor: Нет обнаруженных ключевых точек")
+            os_log("PoseProcessor: Нет обнаруженных ключевых точек", log: OSLog.default, type: .debug)
             return
         }
         
@@ -21,15 +22,15 @@ class PoseProcessor {
             let visibility = landmarks[index].visibility?.doubleValue ?? 0.0
             let x = landmarks[index].x
             let y = landmarks[index].y
-            print("PoseProcessor: Точка \(index) - x: \(x), y: \(y), visibility: \(visibility)")
+            os_log("PoseProcessor: Точка %d - x: %f, y: %f, visibility: %f", log: OSLog.default, type: .debug, index, x, y, visibility)
             if visibility < 0.5 {
-                print("PoseProcessor: Ключевая точка \(index) не видна, visibility: \(visibility)")
+                os_log("PoseProcessor: Ключевая точка %d не видна, visibility: %f", log: OSLog.default, type: .debug, index, visibility)
                 allVisible = false
             }
         }
         
         guard allVisible else {
-            print("PoseProcessor: Не все ключевые точки видны")
+            os_log("PoseProcessor: Не все ключевые точки видны", log: OSLog.default, type: .debug)
             return
         }
         
@@ -41,7 +42,7 @@ class PoseProcessor {
         let hipY = (leftHip.y + rightHip.y) / 2
         let kneeY = (leftKnee.y + rightKnee.y) / 2
         
-        print("hipY: \(hipY), kneeY: \(kneeY), isSquatting: \(isSquatting)")
+        os_log("PoseProcessor: hipY: %f, kneeY: %f, isSquatting: %d", log: OSLog.default, type: .debug, hipY, kneeY, isSquatting ? 1 : 0)
         
         let threshold: Float = 0.05
         
@@ -49,13 +50,13 @@ class PoseProcessor {
             // В нижней точке приседания hipY больше kneeY
             if hipY > kneeY + threshold && !isSquatting {
                 isSquatting = true
-                print("Начало приседания")
+                os_log("PoseProcessor: Начало приседания", log: OSLog.default, type: .debug)
             }
             // В верхней точке приседания hipY меньше kneeY
             else if hipY < kneeY - threshold && isSquatting {
                 isSquatting = false
                 repCount += 1
-                print("Конец приседания, repCount: \(repCount)")
+                os_log("PoseProcessor: Конец приседания, repCount: %d", log: OSLog.default, type: .debug, repCount)
                 onRepCountUpdated?(repCount)
             }
         }

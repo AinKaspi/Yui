@@ -1,6 +1,7 @@
 import UIKit
 import AVFoundation
 import MediaPipeTasksVision
+import os.log
 
 class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStreamDelegate {
     
@@ -73,7 +74,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     // MARK: - Жизненный цикл
     override func viewDidLoad() {
         super.viewDidLoad()
-        print("viewDidLoad вызван для \(exercise.name)")
+        os_log("ExerciseExecutionViewController: viewDidLoad вызван для %@", log: OSLog.default, type: .debug, exercise.name)
         setupUI()
         setupLoadingIndicator()
         setupCameraManager()
@@ -84,13 +85,13 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        print("viewDidAppear вызван, запускаем камеру")
+        os_log("ExerciseExecutionViewController: viewDidAppear вызван, запускаем камеру", log: OSLog.default, type: .debug)
         cameraManager.startSession()
     }
     
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        print("viewWillDisappear вызван, останавливаем камеру")
+        os_log("ExerciseExecutionViewController: viewWillDisappear вызван, останавливаем камеру", log: OSLog.default, type: .debug)
         cameraManager.stopSession()
     }
     
@@ -151,11 +152,11 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     
     // MARK: - Функция: Настройка CameraManager
     private func setupCameraManager() {
-        print("Настройка CameraManager")
+        os_log("ExerciseExecutionViewController: Настройка CameraManager", log: OSLog.default, type: .debug)
         cameraManager = CameraManager()
         cameraManager.setupCamera { [weak self] previewLayer in
             guard let self = self else { return }
-            print("Камера настроена, добавляем previewLayer")
+            os_log("ExerciseExecutionViewController: Камера настроена, добавляем previewLayer", log: OSLog.default, type: .debug)
             self.view.layer.insertSublayer(previewLayer, at: 0)
             self.cameraManager.updatePreviewLayerFrame(self.view.bounds)
             DispatchQueue.main.async {
@@ -167,11 +168,11 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     
     // MARK: - Функция: Настройка MediaPipe
     private func setupMediaPipe() {
-        print("Настройка MediaPipe")
+        os_log("ExerciseExecutionViewController: Настройка MediaPipe", log: OSLog.default, type: .debug)
         let startTime = Date()
         
         guard let modelPath = Bundle.main.path(forResource: "pose_landmarker_full", ofType: "task") else {
-            print("Не удалось найти файл модели pose_landmarker_full.task")
+            os_log("ExerciseExecutionViewController: Не удалось найти файл модели pose_landmarker_full.task", log: OSLog.default, type: .error)
             return
         }
         
@@ -192,15 +193,15 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
             poseLandmarker = try PoseLandmarker(options: options)
             isPoseLandmarkerSetup = true
             let duration = Date().timeIntervalSince(startTime)
-            print("MediaPipe успешно настроен за \(duration) секунд")
+            os_log("ExerciseExecutionViewController: MediaPipe успешно настроен за %f секунд", log: OSLog.default, type: .debug, duration)
         } catch {
-            print("Ошибка инициализации Pose Landmarker: \(error)")
+            os_log("ExerciseExecutionViewController: Ошибка инициализации Pose Landmarker: %@", log: OSLog.default, type: .error, error.localizedDescription)
         }
     }
     
     // MARK: - Функция: Настройка PoseProcessor
     private func setupPoseProcessor() {
-        print("Настройка PoseProcessor")
+        os_log("ExerciseExecutionViewController: Настройка PoseProcessor", log: OSLog.default, type: .debug)
         poseProcessor = PoseProcessor()
         poseProcessor.onRepCountUpdated = { [weak self] count in
             DispatchQueue.main.async {
@@ -217,7 +218,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         error: Error?
     ) {
         guard let result = result, error == nil else {
-            print("Ошибка обработки MediaPipe: \(error?.localizedDescription ?? "Неизвестная ошибка")")
+            os_log("ExerciseExecutionViewController: Ошибка обработки MediaPipe: %@", log: OSLog.default, type: .error, error?.localizedDescription ?? "Неизвестная ошибка")
             DispatchQueue.main.async { [weak self] in
                 self?.instructionLabel.isHidden = false
             }
@@ -235,7 +236,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     // MARK: - Функция: Отрисовка ключевых точек
     private func drawLandmarks(_ landmarks: [NormalizedLandmark]?) {
         guard let landmarks = landmarks else {
-            print("Нет ключевых точек для отрисовки")
+            os_log("ExerciseExecutionViewController: Нет ключевых точек для отрисовки", log: OSLog.default, type: .debug)
             landmarksLayer.sublayers?.removeAll()
             return
         }
@@ -257,7 +258,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
             
             // Пропускаем некорректные координаты
             if x < 0 || x > 1 || y < 0 || y > 1 {
-                print("Недопустимые координаты: x=\(x), y=\(y)")
+                os_log("ExerciseExecutionViewController: Недопустимые координаты: x=%f, y=%f", log: OSLog.default, type: .debug, x, y)
                 continue
             }
             
@@ -287,21 +288,21 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
 extension ExerciseExecutionViewController: CameraManagerDelegate {
     func cameraManager(_ manager: CameraManager, didOutput sampleBuffer: CMSampleBuffer, orientation: UIImage.Orientation, timestamp: Int64) {
         guard isPoseLandmarkerSetup, poseLandmarker != nil else {
-            print("PoseLandmarker не инициализирован")
+            os_log("ExerciseExecutionViewController: PoseLandmarker не инициализирован", log: OSLog.default, type: .error)
             return
         }
         
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            print("Не удалось получить pixelBuffer из sampleBuffer")
+            os_log("ExerciseExecutionViewController: Не удалось получить pixelBuffer из sampleBuffer", log: OSLog.default, type: .error)
             return
         }
         
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
-        print("Размеры изображения: \(width)x\(height)")
+        os_log("ExerciseExecutionViewController: Размеры изображения: %dx%d", log: OSLog.default, type: .debug, width, height)
         
         guard let image = try? MPImage(sampleBuffer: sampleBuffer, orientation: orientation) else {
-            print("Не удалось преобразовать CMSampleBuffer в MPImage")
+            os_log("ExerciseExecutionViewController: Не удалось преобразовать CMSampleBuffer в MPImage", log: OSLog.default, type: .error)
             return
         }
         
@@ -309,7 +310,7 @@ extension ExerciseExecutionViewController: CameraManagerDelegate {
             let timestampInMilliseconds = Int(timestamp)
             try poseLandmarker?.detectAsync(image: image, timestampInMilliseconds: timestampInMilliseconds)
         } catch {
-            print("Ошибка обработки кадра: \(error)")
+            os_log("ExerciseExecutionViewController: Ошибка обработки кадра: %@", log: OSLog.default, type: .error, error.localizedDescription)
         }
     }
 }

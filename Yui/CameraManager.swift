@@ -1,22 +1,29 @@
 import AVFoundation
 import UIKit
+import os.log
 
 protocol CameraManagerDelegate: AnyObject {
     func cameraManager(_ manager: CameraManager, didOutput sampleBuffer: CMSampleBuffer, orientation: UIImage.Orientation, timestamp: Int64)
 }
 
-class CameraManager {
+class CameraManager: NSObject {
     private let captureSession = AVCaptureSession()
     private var videoDevice: AVCaptureDevice?
     private var videoInput: AVCaptureDeviceInput?
     private let videoOutput = AVCaptureVideoDataOutput()
     private var previewLayer: AVCaptureVideoPreviewLayer!
-    private var sessionQueue = DispatchQueue(label: "com.yui.cameraSessionQueue")
+    private let sessionQueue = DispatchQueue(label: "com.yui.cameraSessionQueue", qos: .userInitiated)
+    private let processingQueue = DispatchQueue(label: "com.yui.processingQueue", qos: .userInitiated)
     
     weak var delegate: CameraManagerDelegate?
     
+    override init() {
+        super.init()
+        os_log("CameraManager: Инициализация", log: OSLog.default, type: .debug)
+    }
+    
     func setupCamera(completion: @escaping (AVCaptureVideoPreviewLayer) -> Void) {
-        print("CameraManager: Настройка камеры")
+        os_log("CameraManager: Настройка камеры", log: OSLog.default, type: .debug)
         
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
@@ -25,7 +32,7 @@ class CameraManager {
             
             // Настройка входного устройства
             guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
-                print("CameraManager: Не удалось найти фронтальную камеру")
+                os_log("CameraManager: Не удалось найти фронтальную камеру", log: OSLog.default, type: .error)
                 return
             }
             self.videoDevice = device
@@ -37,15 +44,25 @@ class CameraManager {
                     self.videoInput = input
                 }
             } catch {
-                print("CameraManager: Ошибка настройки входного устройства: \(error)")
+                os_log("CameraManager: Ошибка настройки входного устройства: %@", log: OSLog.default, type: .error, error.localizedDescription)
                 return
+            }
+            
+            // Оптимизация частоты кадров
+            do {
+                try device.lockForConfiguration()
+                device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 30) // 30 fps
+                device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 30)
+                device.unlockForConfiguration()
+            } catch {
+                os_log("CameraManager: Ошибка настройки частоты кадров: %@", log: OSLog.default, type: .error, error.localizedDescription)
             }
             
             // Настройка выхода
             self.videoOutput.videoSettings = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
             ]
-            self.videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "com.yui.videoQueue"))
+            self.videoOutput.setSampleBufferDelegate(self, queue: self.processingQueue)
             if self.captureSession.canAddOutput(self.videoOutput) {
                 self.captureSession.addOutput(self.videoOutput)
             }
@@ -64,30 +81,30 @@ class CameraManager {
                 guard let self = self else { return }
                 self.previewLayer = AVCaptureVideoPreviewLayer(session: self.captureSession)
                 self.previewLayer.videoGravity = .resizeAspectFill
-                print("CameraManager: Обновление frame для previewLayer: \(self.previewLayer.frame)")
+                os_log("CameraManager: Обновление frame для previewLayer: %@", log: OSLog.default, type: .debug, String(describing: self.previewLayer.frame))
                 completion(self.previewLayer)
             }
         }
     }
     
     func startSession() {
-        print("CameraManager: Запуск сессии")
+        os_log("CameraManager: Запуск сессии", log: OSLog.default, type: .debug)
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             if !self.captureSession.isRunning {
                 self.captureSession.startRunning()
-                print("CameraManager: Сессия запущена")
+                os_log("CameraManager: Сессия запущена", log: OSLog.default, type: .debug)
             }
         }
     }
     
     func stopSession() {
-        print("CameraManager: Остановка сессии")
+        os_log("CameraManager: Остановка сессии", log: OSLog.default, type: .debug)
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             if self.captureSession.isRunning {
                 self.captureSession.stopRunning()
-                print("CameraManager: Сессия остановлена")
+                os_log("CameraManager: Сессия остановлена", log: OSLog.default, type: .debug)
             }
         }
     }
@@ -96,7 +113,7 @@ class CameraManager {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.previewLayer.frame = frame
-            print("CameraManager: Обновление frame для previewLayer: \(frame)")
+            os_log("CameraManager: Обновление frame для previewLayer: %@", log: OSLog.default, type: .debug, String(describing: frame))
         }
     }
 }
@@ -105,11 +122,16 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).value
         let orientation: UIImage.Orientation = .right // Фиксированная ориентация
-        print("CameraManager: Угол поворота камеры установлен вручную: 90")
+        os_log("CameraManager: Угол поворота камеры установлен вручную: 90", log: OSLog.default, type: .debug)
         
-        let width = CVPixelBufferGetWidth(CMSampleBufferGetImageBuffer(sampleBuffer)!)
-        let height = CVPixelBufferGetHeight(CMSampleBufferGetImageBuffer(sampleBuffer)!)
-        print("Размеры изображения: \(width)x\(height)")
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            os_log("CameraManager: Не удалось получить pixelBuffer", log: OSLog.default, type: .error)
+            return
+        }
+        
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        os_log("CameraManager: Размеры изображения: %dx%d", log: OSLog.default, type: .debug, width, height)
         
         delegate?.cameraManager(self, didOutput: sampleBuffer, orientation: orientation, timestamp: timestamp)
     }
