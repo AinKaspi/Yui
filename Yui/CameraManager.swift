@@ -1,5 +1,5 @@
 import AVFoundation
-import UIKit // Добавляем импорт UIKit
+import UIKit
 
 protocol CameraManagerDelegate: AnyObject {
     func cameraManager(_ manager: CameraManager, didOutput sampleBuffer: CMSampleBuffer, orientation: UIImage.Orientation, timestamp: Int64)
@@ -16,9 +16,10 @@ class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     }
     
     func setupCamera(completion: @escaping (AVCaptureVideoPreviewLayer) -> Void) {
+        print("CameraManager: Настройка камеры")
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard granted else {
-                print("Доступ к камере не предоставлен")
+                print("CameraManager: Доступ к камере не предоставлен")
                 return
             }
             
@@ -26,7 +27,7 @@ class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             
             guard let frontCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
                   let input = try? AVCaptureDeviceInput(device: frontCamera) else {
-                print("Не удалось найти фронтальную камеру")
+                print("CameraManager: Не удалось найти фронтальную камеру")
                 return
             }
             
@@ -57,12 +58,15 @@ class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     }
     
     func startSession() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.captureSession.startRunning()
+        print("CameraManager: Запуск сессии")
+        if !captureSession.isRunning {
+            captureSession.startRunning() // Выполняем синхронно на главном потоке
+            print("CameraManager: Сессия запущена")
         }
     }
     
     func stopSession() {
+        print("CameraManager: Остановка сессии")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.captureSession.stopRunning()
         }
@@ -70,6 +74,7 @@ class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     
     func updatePreviewLayerFrame(_ frame: CGRect) {
         previewLayer?.frame = frame
+        print("CameraManager: Обновление frame для previewLayer: \(frame)")
     }
     
     // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
@@ -77,7 +82,7 @@ class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let timestampInSeconds = CMTimeGetSeconds(timestamp)
         guard !timestampInSeconds.isNaN, timestampInSeconds >= 0 else {
-            print("Некорректная временная метка: \(timestampInSeconds)")
+            print("CameraManager: Некорректная временная метка: \(timestampInSeconds)")
             return
         }
         let timestampInMilliseconds = Int64(timestampInSeconds * 1000)
@@ -87,18 +92,8 @@ class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     }
     
     private func getImageOrientation(from connection: AVCaptureConnection) -> UIImage.Orientation {
-        let rotationAngle = connection.videoRotationAngle
-        switch rotationAngle {
-        case 90:
-            return .right
-        case 270:
-            return .left
-        case 0:
-            return .up
-        case 180:
-            return .down
-        default:
-            return .right
-        }
+        // Временно принудительно устанавливаем .right для фронтальной камеры
+        print("CameraManager: Угол поворота камеры установлен вручную: 90")
+        return .right
     }
 }

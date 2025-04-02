@@ -1,6 +1,5 @@
 import UIKit
 
-// MARK: - Класс StartViewController
 class StartViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
     
     private let exercises: [Exercise] = Exercise.testExercises
@@ -47,6 +46,11 @@ class StartViewController: UIViewController, UITableViewDataSource, UITableViewD
         tableView.deselectRow(at: indexPath, animated: true)
         let exercise = exercises[indexPath.row]
         let exerciseVC = ExerciseExecutionViewController(exercise: exercise)
-        navigationController?.pushViewController(exerciseVC, animated: true)
+        print("Переход на ExerciseExecutionViewController для упражнения: \(exercise.name)")
+        if let navController = navigationController {
+            navController.pushViewController(exerciseVC, animated: true)
+        } else {
+            print("Ошибка: navigationController не найден")
+        }
     }
 }

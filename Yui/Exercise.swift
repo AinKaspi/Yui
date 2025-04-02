@@ -1,24 +1,11 @@
 import Foundation
 
-// MARK: - Модель Exercise
-// Эта структура хранит данные об упражнении.
-// Содержит название и описание.
 struct Exercise {
-    // Название упражнения (например, "Приседания").
     let name: String
-    
-    // Описание упражнения (например, "Выполните приседания с прямой спиной").
     let description: String
-}
-
-// MARK: - Тестовые данные
-// Расширение для Exercise, чтобы создать тестовый список упражнений.
-// Это позволяет нам сразу протестировать UI.
-extension Exercise {
-    // Статическое свойство testExercises создаёт тестовый список упражнений.
-    static let testExercises = [
-        Exercise(name: "Приседания", description: "Выполните приседания с прямой спиной"),
-        Exercise(name: "Отжимания", description: "Выполните отжимания, держа тело прямо"),
-        Exercise(name: "Планка", description: "Держите планку 30 секунд")
+    
+    static let testExercises: [Exercise] = [
+        Exercise(name: "Приседания", description: "Выполните 10 приседаний"),
+        Exercise(name: "Отжимания", description: "Выполните 10 отжиманий")
     ]
 }
