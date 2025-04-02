@@ -1,0 +1,10 @@
+# Исключаем папку Pods (CocoaPods)
+Pods/
+
+# Исключаем временные файлы Xcode
+*.xcworkspace
+*.xcodeproj
+DerivedData/
+
+# Исключаем другие большие файлы, кроме pose_landmarker_full.task
+*.a
