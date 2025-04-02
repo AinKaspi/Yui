@@ -185,10 +185,6 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         options.minPosePresenceConfidence = 0.5
         options.poseLandmarkerLiveStreamDelegate = self
         
-        // Указываем размеры изображения для корректной нормализации
-        options.baseOptions.imageWidth = 1920
-        options.baseOptions.imageHeight = 1080
-        
         do {
             poseLandmarker = try PoseLandmarker(options: options)
             isPoseLandmarkerSetup = true

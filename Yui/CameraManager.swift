@@ -69,8 +69,8 @@ class CameraManager: NSObject {
             
             // Настройка ориентации
             if let connection = self.videoOutput.connection(with: .video) {
-                if connection.isVideoOrientationSupported {
-                    connection.videoOrientation = .landscapeRight
+                if connection.isVideoRotationAngleSupported(90) {
+                    connection.videoRotationAngle = 90
                 }
             }
             
@@ -121,8 +121,22 @@ class CameraManager: NSObject {
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).value
-        let orientation: UIImage.Orientation = .right // Фиксированная ориентация
-        os_log("CameraManager: Угол поворота камеры установлен вручную: 90", log: OSLog.default, type: .debug)
+        
+        // Динамически определяем ориентацию устройства
+        let orientation: UIImage.Orientation
+        switch UIDevice.current.orientation {
+        case .portrait:
+            orientation = .right
+        case .portraitUpsideDown:
+            orientation = .left
+        case .landscapeLeft:
+            orientation = .up
+        case .landscapeRight:
+            orientation = .down
+        default:
+            orientation = .right // Значение по умолчанию
+        }
+        os_log("CameraManager: Ориентация устройства: %@", log: OSLog.default, type: .debug, String(describing: orientation))
         
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             os_log("CameraManager: Не удалось получить pixelBuffer", log: OSLog.default, type: .error)
