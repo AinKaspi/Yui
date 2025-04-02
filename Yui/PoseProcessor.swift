@@ -5,6 +5,7 @@ class PoseProcessor {
     private var repCount = 0
     private var isSquatting = false
     private var previousHipY: Float?
+    private var previousKneeY: Float?
     
     var onRepCountUpdated: ((Int) -> Void)?
     
@@ -21,7 +22,7 @@ class PoseProcessor {
             let x = landmarks[index].x
             let y = landmarks[index].y
             print("PoseProcessor: Точка \(index) - x: \(x), y: \(y), visibility: \(visibility)")
-            if visibility < 0.1 {
+            if visibility < 0.5 {
                 print("PoseProcessor: Ключевая точка \(index) не видна, visibility: \(visibility)")
                 allVisible = false
             }
@@ -44,7 +45,7 @@ class PoseProcessor {
         
         let threshold: Float = 0.05
         
-        if previousHipY != nil {
+        if previousHipY != nil && previousKneeY != nil {
             // В нижней точке приседания hipY больше kneeY
             if hipY > kneeY + threshold && !isSquatting {
                 isSquatting = true
@@ -60,5 +61,6 @@ class PoseProcessor {
         }
         
         self.previousHipY = hipY
+        self.previousKneeY = kneeY
     }
 }

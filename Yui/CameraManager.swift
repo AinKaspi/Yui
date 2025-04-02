@@ -5,95 +5,112 @@ protocol CameraManagerDelegate: AnyObject {
     func cameraManager(_ manager: CameraManager, didOutput sampleBuffer: CMSampleBuffer, orientation: UIImage.Orientation, timestamp: Int64)
 }
 
-class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-    
+class CameraManager {
     private let captureSession = AVCaptureSession()
-    private var previewLayer: AVCaptureVideoPreviewLayer?
-    weak var delegate: CameraManagerDelegate?
+    private var videoDevice: AVCaptureDevice?
+    private var videoInput: AVCaptureDeviceInput?
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private var previewLayer: AVCaptureVideoPreviewLayer!
+    private var sessionQueue = DispatchQueue(label: "com.yui.cameraSessionQueue")
     
-    override init() {
-        super.init()
-    }
+    weak var delegate: CameraManagerDelegate?
     
     func setupCamera(completion: @escaping (AVCaptureVideoPreviewLayer) -> Void) {
         print("CameraManager: Настройка камеры")
-        AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-            guard granted else {
-                print("CameraManager: Доступ к камере не предоставлен")
-                return
-            }
+        
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
             
-            self?.captureSession.sessionPreset = .high
+            self.captureSession.beginConfiguration()
             
-            guard let frontCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
-                  let input = try? AVCaptureDeviceInput(device: frontCamera) else {
+            // Настройка входного устройства
+            guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
                 print("CameraManager: Не удалось найти фронтальную камеру")
                 return
             }
+            self.videoDevice = device
             
-            if self?.captureSession.canAddInput(input) == true {
-                self?.captureSession.addInput(input)
+            do {
+                let input = try AVCaptureDeviceInput(device: device)
+                if self.captureSession.canAddInput(input) {
+                    self.captureSession.addInput(input)
+                    self.videoInput = input
+                }
+            } catch {
+                print("CameraManager: Ошибка настройки входного устройства: \(error)")
+                return
             }
             
-            let videoOutput = AVCaptureVideoDataOutput()
-            videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: kCVPixelFormatType_32BGRA)]
-            videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue"))
-            if self?.captureSession.canAddOutput(videoOutput) == true {
-                self?.captureSession.addOutput(videoOutput)
+            // Настройка выхода
+            self.videoOutput.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ]
+            self.videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "com.yui.videoQueue"))
+            if self.captureSession.canAddOutput(self.videoOutput) {
+                self.captureSession.addOutput(self.videoOutput)
             }
             
-            if let connection = videoOutput.connection(with: .video) {
-                connection.isVideoMirrored = true
+            // Настройка ориентации
+            if let connection = self.videoOutput.connection(with: .video) {
+                if connection.isVideoOrientationSupported {
+                    connection.videoOrientation = .landscapeRight
+                }
             }
             
+            self.captureSession.commitConfiguration()
+            
+            // Настройка previewLayer
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.previewLayer = AVCaptureVideoPreviewLayer(session: self.captureSession)
-                self.previewLayer?.videoGravity = .resizeAspectFill
-                if let previewLayer = self.previewLayer {
-                    completion(previewLayer)
-                }
+                self.previewLayer.videoGravity = .resizeAspectFill
+                print("CameraManager: Обновление frame для previewLayer: \(self.previewLayer.frame)")
+                completion(self.previewLayer)
             }
         }
     }
     
     func startSession() {
         print("CameraManager: Запуск сессии")
-        if !captureSession.isRunning {
-            captureSession.startRunning() // Выполняем синхронно на главном потоке
-            print("CameraManager: Сессия запущена")
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            if !self.captureSession.isRunning {
+                self.captureSession.startRunning()
+                print("CameraManager: Сессия запущена")
+            }
         }
     }
     
     func stopSession() {
         print("CameraManager: Остановка сессии")
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.captureSession.stopRunning()
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            if self.captureSession.isRunning {
+                self.captureSession.stopRunning()
+                print("CameraManager: Сессия остановлена")
+            }
         }
     }
     
     func updatePreviewLayerFrame(_ frame: CGRect) {
-        previewLayer?.frame = frame
-        print("CameraManager: Обновление frame для previewLayer: \(frame)")
-    }
-    
-    // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
-    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        let timestampInSeconds = CMTimeGetSeconds(timestamp)
-        guard !timestampInSeconds.isNaN, timestampInSeconds >= 0 else {
-            print("CameraManager: Некорректная временная метка: \(timestampInSeconds)")
-            return
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.previewLayer.frame = frame
+            print("CameraManager: Обновление frame для previewLayer: \(frame)")
         }
-        let timestampInMilliseconds = Int64(timestampInSeconds * 1000)
-        
-        let orientation = getImageOrientation(from: connection)
-        delegate?.cameraManager(self, didOutput: sampleBuffer, orientation: orientation, timestamp: timestampInMilliseconds)
     }
-    
-    private func getImageOrientation(from connection: AVCaptureConnection) -> UIImage.Orientation {
-        // Временно принудительно устанавливаем .right для фронтальной камеры
+}
+
+extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).value
+        let orientation: UIImage.Orientation = .right // Фиксированная ориентация
         print("CameraManager: Угол поворота камеры установлен вручную: 90")
-        return .right
+        
+        let width = CVPixelBufferGetWidth(CMSampleBufferGetImageBuffer(sampleBuffer)!)
+        let height = CVPixelBufferGetHeight(CMSampleBufferGetImageBuffer(sampleBuffer)!)
+        print("Размеры изображения: \(width)x\(height)")
+        
+        delegate?.cameraManager(self, didOutput: sampleBuffer, orientation: orientation, timestamp: timestamp)
     }
 }

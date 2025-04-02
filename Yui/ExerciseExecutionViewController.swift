@@ -27,6 +27,17 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         return label
     }()
     
+    private let instructionLabel: UILabel = {
+        let label = UILabel()
+        label.font = .systemFont(ofSize: 18)
+        label.textColor = .white
+        label.textAlignment = .center
+        label.text = "Подойдите ближе к камере"
+        label.isHidden = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }()
+    
     private let finishButton: UIButton = {
         let button = UIButton(type: .system)
         button.setTitle("Завершить", for: .normal)
@@ -47,7 +58,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     
     private var poseLandmarker: PoseLandmarker?
     private var isPoseLandmarkerSetup = false
-    private let landmarksLayer = CALayer() // Слой для отображения ключевых точек
+    private let landmarksLayer = CALayer()
     
     // MARK: - Инициализация
     init(exercise: Exercise) {
@@ -86,7 +97,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         cameraManager.updatePreviewLayerFrame(view.bounds)
-        landmarksLayer.frame = view.bounds // Обновляем размеры слоя для точек
+        landmarksLayer.frame = view.bounds
     }
     
     // MARK: - Функция: Настройка UI
@@ -94,6 +105,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         view.backgroundColor = .black
         view.addSubview(exerciseLabel)
         view.addSubview(repsLabel)
+        view.addSubview(instructionLabel)
         view.addSubview(finishButton)
         
         exerciseLabel.text = exercise.name
@@ -108,6 +120,10 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
             repsLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             repsLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
             repsLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            
+            instructionLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -50),
+            instructionLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            instructionLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
             
             finishButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
             finishButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -141,8 +157,9 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
             guard let self = self else { return }
             print("Камера настроена, добавляем previewLayer")
             self.view.layer.insertSublayer(previewLayer, at: 0)
+            self.cameraManager.updatePreviewLayerFrame(self.view.bounds)
             DispatchQueue.main.async {
-                self.loadingIndicator.stopAnimating() // Останавливаем индикатор, когда камера готова
+                self.loadingIndicator.stopAnimating()
             }
         }
         cameraManager.delegate = self
@@ -162,10 +179,14 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         options.baseOptions.modelAssetPath = modelPath
         options.runningMode = .liveStream
         options.numPoses = 1
-        options.minPoseDetectionConfidence = 0.3
-        options.minTrackingConfidence = 0.3
-        options.minPosePresenceConfidence = 0.3
+        options.minPoseDetectionConfidence = 0.5
+        options.minTrackingConfidence = 0.5
+        options.minPosePresenceConfidence = 0.5
         options.poseLandmarkerLiveStreamDelegate = self
+        
+        // Указываем размеры изображения для корректной нормализации
+        options.baseOptions.imageWidth = 1920
+        options.baseOptions.imageHeight = 1080
         
         do {
             poseLandmarker = try PoseLandmarker(options: options)
@@ -197,47 +218,52 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     ) {
         guard let result = result, error == nil else {
             print("Ошибка обработки MediaPipe: \(error?.localizedDescription ?? "Неизвестная ошибка")")
+            DispatchQueue.main.async { [weak self] in
+                self?.instructionLabel.isHidden = false
+            }
             return
         }
         
         poseProcessor.processPoseLandmarks(result)
         
-        // Рисуем ключевые точки
         DispatchQueue.main.async { [weak self] in
+            self?.instructionLabel.isHidden = true
             self?.drawLandmarks(result.landmarks.first)
         }
     }
     
     // MARK: - Функция: Отрисовка ключевых точек
     private func drawLandmarks(_ landmarks: [NormalizedLandmark]?) {
-        guard let landmarks = landmarks else { return }
+        guard let landmarks = landmarks else {
+            print("Нет ключевых точек для отрисовки")
+            landmarksLayer.sublayers?.removeAll()
+            return
+        }
         
-        // Очищаем старые точки
         landmarksLayer.sublayers?.removeAll()
         
-        // Размеры экрана
         let screenWidth = view.bounds.width
         let screenHeight = view.bounds.height
         
-        // Размеры изображения с камеры
-        let imageWidth: CGFloat = 1920.0
-        let imageHeight: CGFloat = 1080.0
-        
-        // Учитываем ориентацию .right (поворот на 90 градусов)
         for landmark in landmarks {
-            // Нормализованные координаты
-            var x = CGFloat(landmark.x)
-            var y = CGFloat(landmark.y)
+            // Фильтруем точки с низкой видимостью
+            let visibility = landmark.visibility?.floatValue ?? 0.0
+            if visibility < 0.5 {
+                continue
+            }
             
-            // Проверяем, что координаты в допустимом диапазоне
+            let x = CGFloat(landmark.x)
+            let y = CGFloat(landmark.y)
+            
+            // Пропускаем некорректные координаты
             if x < 0 || x > 1 || y < 0 || y > 1 {
                 print("Недопустимые координаты: x=\(x), y=\(y)")
                 continue
             }
             
-            // Учитываем поворот на 90 градусов (для .right)
-            let rotatedX = y
-            let rotatedY = 1.0 - x
+            // Учитываем зеркальность фронтальной камеры
+            let rotatedX = 1.0 - x // Зеркалим по горизонтали
+            let rotatedY = y
             
             // Масштабируем к размерам экрана
             let scaledX = rotatedX * screenWidth
