@@ -1,23 +1,17 @@
 import UIKit
-import os.log
 
-class ExerciseListViewController: UIViewController {
-    // MARK: - Свойства
+class ExerciseListViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
+    private let tableView = UITableView()
     private let viewModel: ExerciseListViewModel
-    private let workout: Workout
-    private let storageService: StorageServiceProtocol
+    private let cameraService: CameraService
+    private let poseDetectionService: PoseDetectionService
+    private let poseProcessor: PoseProcessor
     
-    private let tableView: UITableView = {
-        let tableView = UITableView()
-        tableView.translatesAutoresizingMaskIntoConstraints = false
-        return tableView
-    }()
-    
-    // MARK: - Инициализация
-    init(viewModel: ExerciseListViewModel, workout: Workout, storageService: StorageServiceProtocol) {
+    init(viewModel: ExerciseListViewModel, cameraService: CameraService, poseDetectionService: PoseDetectionService, poseProcessor: PoseProcessor) {
         self.viewModel = viewModel
-        self.workout = workout
-        self.storageService = storageService
+        self.cameraService = cameraService
+        self.poseDetectionService = poseDetectionService
+        self.poseProcessor = poseProcessor
         super.init(nibName: nil, bundle: nil)
     }
     
@@ -25,36 +19,35 @@ class ExerciseListViewController: UIViewController {
         fatalError("init(coder:) has not been implemented")
     }
     
-    // MARK: - Жизненный цикл
     override func viewDidLoad() {
         super.viewDidLoad()
-        os_log("ExerciseListViewController: viewDidLoad вызван", log: OSLog.default, type: .debug)
         setupUI()
+        setupTableView()
     }
     
-    // MARK: - Настройка UI
     private func setupUI() {
-        title = viewModel.workoutName
         view.backgroundColor = .white
+        title = "Exercises"
         
+        tableView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tableView)
-        tableView.delegate = self
-        tableView.dataSource = self
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "ExerciseCell")
-        
         NSLayoutConstraint.activate([
-            tableView.topAnchor.constraint(equalTo: view.topAnchor),
+            tableView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
     }
-}
-
-// MARK: - UITableViewDataSource
-extension ExerciseListViewController: UITableViewDataSource {
+    
+    private func setupTableView() {
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "ExerciseCell")
+    }
+    
+    // MARK: - UITableViewDataSource
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return viewModel.numberOfExercises
+        return viewModel.numberOfExercises()
     }
     
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -62,29 +55,23 @@ extension ExerciseListViewController: UITableViewDataSource {
         cell.textLabel?.text = viewModel.exerciseName(at: indexPath.row)
         return cell
     }
-}
-
-// MARK: - UITableViewDelegate
-extension ExerciseListViewController: UITableViewDelegate {
+    
+    // MARK: - UITableViewDelegate
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        
         let exercise = viewModel.exercise(at: indexPath.row)
-        let cameraService = CameraService()
-        let poseDetectionService = PoseDetectionService()
-        let imageProcessingService = ImageProcessingService()
-        let visualizationService = VisualizationService()
         
-        let exerciseViewModel = ExerciseExecutionViewModel(
+        let overlayView = PoseOverlayView(frame: .zero) // Создаём overlayView
+        let visualizationService = VisualizationService(overlayView: overlayView)
+        let controller = ExerciseExecutionViewController(
             exercise: exercise,
             cameraService: cameraService,
             poseDetectionService: poseDetectionService,
-            imageProcessingService: imageProcessingService,
             visualizationService: visualizationService,
-            storageService: storageService
+            delegate: nil, // Если не нужен делегат, передаём nil или убедись, что он есть
+            overlayView: overlayView,
+            poseProcessor: poseProcessor
         )
-        
-        let exerciseVC = ExerciseExecutionViewController(viewModel: exerciseViewModel, workout: workout)
-        navigationController?.pushViewController(exerciseVC, animated: true)
+        navigationController?.pushViewController(controller, animated: true)
     }
 }

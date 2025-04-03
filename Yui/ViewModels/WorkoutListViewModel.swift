@@ -1,52 +1,31 @@
 import Foundation
-import os.log
 
-class WorkoutListViewModel {
-    // MARK: - Свойства
-    private var workouts: [Workout]
-    private let storageService: StorageServiceProtocol
+protocol WorkoutListViewModelProtocol {
+    func numberOfWorkouts() -> Int
+    func workoutName(at index: Int) -> String
+    func exercisesForWorkout(at index: Int) -> [Exercise]
+}
+
+protocol StorageServiceProtocol {
+    func loadWorkouts() -> [(name: String, exercises: [Exercise])]
+}
+
+class WorkoutListViewModel: WorkoutListViewModelProtocol {
+    private let workouts: [(name: String, exercises: [Exercise])]
     
-    // MARK: - Инициализация
     init(storageService: StorageServiceProtocol) {
-        self.storageService = storageService
-        
-        // Загружаем сохранённые тренировки
-        let savedWorkouts = storageService.loadWorkouts()
-        if savedWorkouts.isEmpty {
-            // Если сохранённых тренировок нет, инициализируем стандартный список
-            self.workouts = [
-                Workout(name: "Утренняя тренировка", exercises: [
-                    Exercise(name: "Приседания", description: "20 повторений", type: "repetitive"),
-                    Exercise(name: "Отжимания", description: "15 повторений", type: "pushUp")
-                ]),
-                Workout(name: "Вечерняя тренировка", exercises: [
-                    Exercise(name: "Приседания", description: "15 повторений", type: "repetitive")
-                ])
-            ]
-            // Сохраняем стандартный список
-            storageService.saveWorkouts(self.workouts)
-        } else {
-            self.workouts = savedWorkouts
-        }
+        self.workouts = storageService.loadWorkouts()
     }
     
-    // MARK: - Методы для UI
-    var numberOfWorkouts: Int {
+    func numberOfWorkouts() -> Int {
         return workouts.count
     }
     
     func workoutName(at index: Int) -> String {
-        let workout = workouts[index]
-        if let completionDate = workout.completionDate {
-            let formatter = DateFormatter()
-            formatter.dateStyle = .short
-            formatter.timeStyle = .short
-            return "\(workout.name) (Завершена: \(formatter.string(from: completionDate)))"
-        }
-        return workout.name
+        return workouts[index].name
     }
     
-    func workout(at index: Int) -> Workout {
-        return workouts[index]
+    func exercisesForWorkout(at index: Int) -> [Exercise] {
+        return workouts[index].exercises
     }
 }

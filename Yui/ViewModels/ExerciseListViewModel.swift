@@ -1,22 +1,21 @@
 import Foundation
 
-protocol ExerciseListViewModelProtocol {
-    var workoutName: String { get }
-    var exercises: [Exercise] { get }
-}
-
-class ExerciseListViewModel: ExerciseListViewModelProtocol {
-    private let workout: Workout
+class ExerciseListViewModel {
+    private let exercises: [Exercise]
     
-    var workoutName: String {
-        return workout.name
+    init(exercises: [Exercise]) {
+        self.exercises = exercises
     }
     
-    var exercises: [Exercise] {
-        return workout.exercises
+    func numberOfExercises() -> Int {
+        return exercises.count
     }
     
-    init(workout: Workout) {
-        self.workout = workout
+    func exerciseName(at index: Int) -> String {
+        return exercises[index].name
+    }
+    
+    func exercise(at index: Int) -> Exercise {
+        return exercises[index]
     }
 }

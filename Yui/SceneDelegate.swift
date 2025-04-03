@@ -6,13 +6,26 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = (scene as? UIWindowScene) else { return }
         
-        let window = UIWindow(windowScene: windowScene)
         let storageService = StorageService()
         let viewModel = WorkoutListViewModel(storageService: storageService)
-        let rootVC = UINavigationController(rootViewController: WorkoutListViewController(viewModel: viewModel, storageService: storageService))
+        let cameraService = CameraService()
+        let poseDetectionService = try! PoseDetectionService(delegate: nil) // Заменим позже
+        let poseProcessor = PoseProcessor()
         
-        window.rootViewController = rootVC
-        self.window = window
-        window.makeKeyAndVisible()
+        let rootViewController = WorkoutListViewController(
+            viewModel: viewModel,
+            cameraService: cameraService,
+            poseDetectionService: poseDetectionService,
+            poseProcessor: poseProcessor
+        )
+        
+        // Установим rootViewController как делегат для poseDetectionService
+        poseDetectionService.delegate = rootViewController
+        
+        let navigationController = UINavigationController(rootViewController: rootViewController)
+        
+        window = UIWindow(windowScene: windowScene)
+        window?.rootViewController = navigationController
+        window?.makeKeyAndVisible()
     }
 }

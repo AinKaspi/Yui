@@ -1,94 +1,52 @@
-import MediaPipeTasksVision
 import UIKit
-import os.log
+import MediaPipeTasksVision
 
-// MARK: - Структура для хранения данных о визуализации
-struct VisualLandmark {
-    let position: CGPoint
-    let visibility: Float
-    let isActive: Bool // Указывает, является ли точка активной для текущего упражнения
-    let color: UIColor // Цвет точки
+class VisualizationService {
+    private let overlayView: OverlayView
+    
+    init(overlayView: OverlayView) {
+        self.overlayView = overlayView
+    }
+    
+    func updateOverlay(with landmarks: [NormalizedLandmark]?) {
+        overlayView.landmarks = landmarks ?? []
+    }
 }
 
-// MARK: - Протокол VisualizationServiceProtocol
-protocol VisualizationServiceProtocol {
-    func updatePoseLandmarks(_ landmarks: [NormalizedLandmark], activeLandmarkIndices: Set<Int>, isCorrect: Bool)
-    func clearPoseLandmarks()
-    func drawLandmarks(in view: PoseOverlayView)
-    func animateRepetition()
-}
-
-class VisualizationService: VisualizationServiceProtocol {
-    // MARK: - Свойства
-    private var visualLandmarks: [VisualLandmark] = []
-    private var previousLandmarks: [VisualLandmark] = [] // Для анимации
-    private var animationProgress: CGFloat = 0.0
-    private var isAnimatingRepetition: Bool = false
-    private var isCorrectPose: Bool = true
+class OverlayView: UIView {
+    var landmarks: [NormalizedLandmark] = [] {
+        didSet {
+            setNeedsDisplay()
+        }
+    }
     
-    private let activeColor = UIColor.green
-    private let inactiveColor = UIColor.red
-    private let incorrectColor = UIColor.orange
-    private let lineColor = UIColor.white
-    private let animationDuration: TimeInterval = 0.3 // Длительность анимации
-    
-    // MARK: - Обновление лендмарков
-    func updatePoseLandmarks(_ landmarks: [NormalizedLandmark], activeLandmarkIndices: Set<Int>, isCorrect: Bool) {
-        os_log("VisualizationService: updatePoseLandmarks вызван", log: OSLog.default, type: .debug)
+    override func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext(), !landmarks.isEmpty else { return }
         
-        // Сохраняем предыдущие позиции для анимации
-        previousLandmarks = visualLandmarks
+        context.setStrokeColor(UIColor.red.cgColor)
+        context.setLineWidth(2.0)
         
-        // Обновляем текущие лендмарки
-        visualLandmarks = landmarks.enumerated().map { (index, landmark) in
-            let position = CGPoint(x: CGFloat(landmark.x), y: CGFloat(landmark.y))
-            let isActive = activeLandmarkIndices.contains(index)
-            let color: UIColor
-            if !isCorrect {
-                color = incorrectColor
-            } else {
-                color = isActive ? activeColor : inactiveColor
-            }
-            return VisualLandmark(position: position, visibility: landmark.visibility as! Float, isActive: isActive, color: color)
+        let connections: [(Int, Int)] = [
+            (11, 13), (13, 15), // Left arm
+            (12, 14), (14, 16), // Right arm
+            (11, 23), (12, 24), // Shoulders to hips
+            (23, 25), (25, 27), // Left leg
+            (24, 26), (26, 28)  // Right leg
+        ]
+        
+        for (startIdx, endIdx) in connections where startIdx < landmarks.count && endIdx < landmarks.count {
+            let start = landmarks[startIdx]
+            let end = landmarks[endIdx]
+            
+            let startX = CGFloat(start.x)
+            let startY = CGFloat(start.y)
+            let endX = CGFloat(end.x)
+            let endY = CGFloat(end.y)
+            
+            context.move(to: CGPoint(x: startX, y: startY))
+            context.addLine(to: CGPoint(x: endX, y: endY))
         }
         
-        // Сбрасываем прогресс анимации
-        animationProgress = 0.0
-        isCorrectPose = isCorrect
-    }
-    
-    func clearPoseLandmarks() {
-        os_log("VisualizationService: clearPoseLandmarks вызван", log: OSLog.default, type: .debug)
-        visualLandmarks = []
-        previousLandmarks = []
-        animationProgress = 0.0
-        isAnimatingRepetition = false
-    }
-    
-    // MARK: - Отрисовка
-    func drawLandmarks(in view: PoseOverlayView) {
-        os_log("VisualizationService: drawLandmarks вызван", log: OSLog.default, type: .debug)
-        
-        // Обновляем прогресс анимации
-        if animationProgress < 1.0 {
-            animationProgress += CGFloat(1.0 / (60.0 * animationDuration)) // 60 fps
-            animationProgress = min(animationProgress, 1.0)
-            view.setNeedsDisplay()
-        }
-        
-        view.updateVisualLandmarks(
-            visualLandmarks: visualLandmarks,
-            previousLandmarks: previousLandmarks,
-            animationProgress: animationProgress,
-            isAnimatingRepetition: isAnimatingRepetition,
-            isCorrectPose: isCorrectPose
-        )
-    }
-    
-    // MARK: - Анимация повторения
-    func animateRepetition() {
-        os_log("VisualizationService: animateRepetition вызван", log: OSLog.default, type: .debug)
-        isAnimatingRepetition = true
-        animationProgress = 0.0
+        context.strokePath()
     }
 }
