@@ -9,7 +9,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let storageService = StorageService()
         let viewModel = WorkoutListViewModel(storageService: storageService)
         let cameraService = CameraService()
-        let poseDetectionService = try! PoseDetectionService(delegate: nil) // Заменим позже
+        let poseDetectionService = try! PoseDetectionService(delegate: nil) // Теперь nil допустим
         let poseProcessor = PoseProcessor()
         
         let rootViewController = WorkoutListViewController(
@@ -18,9 +18,6 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             poseDetectionService: poseDetectionService,
             poseProcessor: poseProcessor
         )
-        
-        // Установим rootViewController как делегат для poseDetectionService
-        poseDetectionService.delegate = rootViewController
         
         let navigationController = UINavigationController(rootViewController: rootViewController)
         
