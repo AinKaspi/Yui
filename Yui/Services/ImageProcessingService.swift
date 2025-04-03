@@ -48,7 +48,7 @@ class ImageProcessingService: ImageProcessingServiceProtocol {
                 "inputBVector": CIVector(x: 0, y: 0, z: 1, w: 0),
                 "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
                 "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
-            ]).settingProperties([kCIImageColorSpace: colorSpace])
+            ]).settingProperties([CIImageOption.colorSpace: colorSpace])
         }
         
         // 7. Нормализация значений пикселей (диапазон [0, 1])

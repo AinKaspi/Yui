@@ -25,7 +25,7 @@ class ExerciseExecutionViewModel: ExerciseExecutionViewModelProtocol {
     private let poseOverlayView: PoseOverlayView?
     private let storageService: StorageServiceProtocol
     
-    let cameraService: CameraServiceProtocol
+    var cameraService: CameraServiceProtocol
     private let poseDetectionService: PoseDetectionServiceProtocol
     private let imageProcessingService: ImageProcessingServiceProtocol
     private let visualizationService: VisualizationServiceProtocol
@@ -38,14 +38,16 @@ class ExerciseExecutionViewModel: ExerciseExecutionViewModelProtocol {
     }
     
     var repsCount: String {
-        return "Повторения: \(poseProcessor.repCount)"
-    }
+            return "Повторения: \(poseProcessor.currentRepCount)" // Используем геттер
+        }
     
     var instructionText: String = "Подойдите ближе к камере"
     
     var isInstructionHidden: Bool {
         return isTracking
     }
+    
+    
     
     // MARK: - Инициализация
     init(exercise: Exercise,
@@ -132,28 +134,28 @@ class ExerciseExecutionViewModel: ExerciseExecutionViewModelProtocol {
     
     // MARK: - Сохранение результатов
     func saveResults(workout: Workout) {
-        os_log("ExerciseExecutionViewModel: saveResults вызван", log: OSLog.default, type: .debug)
-        
-        // Загружаем существующие тренировки
-        var workouts = storageService.loadWorkouts()
-        
-        // Находим индекс текущей тренировки
-        guard let workoutIndex = workouts.firstIndex(where: { $0.name == workout.name }) else {
-            os_log("ExerciseExecutionViewModel: Тренировка не найдена", log: OSLog.default, type: .error)
-            return
+            os_log("ExerciseExecutionViewModel: saveResults вызван", log: OSLog.default, type: .debug)
+            
+            // Загружаем существующие тренировки
+            var workouts = storageService.loadWorkouts()
+            
+            // Находим индекс текущей тренировки
+            guard let workoutIndex = workouts.firstIndex(where: { $0.name == workout.name }) else {
+                os_log("ExerciseExecutionViewModel: Тренировка не найдена", log: OSLog.default, type: .error)
+                return
+            }
+            
+            // Обновляем результаты
+            var updatedWorkout = workouts[workoutIndex]
+            updatedWorkout.completedReps = [exercise.name: poseProcessor.currentRepCount] // Используем геттер
+            updatedWorkout.completionDate = Date()
+            
+            // Сохраняем обновлённый список тренировок
+            workouts[workoutIndex] = updatedWorkout
+            storageService.saveWorkouts(workouts)
+            
+            os_log("ExerciseExecutionViewModel: Результаты сохранены для тренировки: %@", log: OSLog.default, type: .debug, workout.name)
         }
-        
-        // Обновляем результаты
-        var updatedWorkout = workouts[workoutIndex]
-        updatedWorkout.completedReps = [exercise.name: poseProcessor.repCount]
-        updatedWorkout.completionDate = Date()
-        
-        // Сохраняем обновлённый список тренировок
-        workouts[workoutIndex] = updatedWorkout
-        storageService.saveWorkouts(workouts)
-        
-        os_log("ExerciseExecutionViewModel: Результаты сохранены для тренировки: %@", log: OSLog.default, type: .debug, workout.name)
-    }
     
     // MARK: - Обновление UI
     func updatePreviewLayerFrame(_ frame: CGRect) {

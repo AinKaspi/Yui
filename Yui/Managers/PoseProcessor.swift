@@ -124,12 +124,17 @@ class PushUpAnalyzer: ExerciseAnalyzer {
 // MARK: - Основной класс PoseProcessor
 class PoseProcessor {
     // MARK: - Свойства
-    private var repCount: Int = 0
-    private var analyzer: ExerciseAnalyzer
-    private var feedback: ExerciseFeedback = .none
-    
-    var onRepCountUpdated: ((Int) -> Void)?
-    var onFeedbackUpdated: ((String) -> Void)?
+        private var repCount: Int = 0
+        private var analyzer: ExerciseAnalyzer
+        private var feedback: ExerciseFeedback = .none
+        
+        var onRepCountUpdated: ((Int) -> Void)?
+        var onFeedbackUpdated: ((String) -> Void)?
+        
+        // Публичный геттер для repCount
+        var currentRepCount: Int {
+            return repCount
+        }
     
     // MARK: - Инициализация
     init(exerciseType: ExerciseType = .squat) {
