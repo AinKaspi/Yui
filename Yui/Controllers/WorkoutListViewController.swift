@@ -1,8 +1,8 @@
 import UIKit
 import os.log
 
-class ExerciseListViewController: UIViewController {
-    private let viewModel: ExerciseListViewModelProtocol
+class WorkoutListViewController: UIViewController {
+    private let viewModel: WorkoutListViewModelProtocol
     
     private let tableView: UITableView = {
         let tableView = UITableView()
@@ -10,7 +10,7 @@ class ExerciseListViewController: UIViewController {
         return tableView
     }()
     
-    init(viewModel: ExerciseListViewModelProtocol) {
+    init(viewModel: WorkoutListViewModelProtocol) {
         self.viewModel = viewModel
         super.init(nibName: nil, bundle: nil)
     }
@@ -21,18 +21,18 @@ class ExerciseListViewController: UIViewController {
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        os_log("ExerciseListViewController: viewDidLoad вызван для тренировки %@", log: OSLog.default, type: .debug, viewModel.workoutName)
+        os_log("WorkoutListViewController: viewDidLoad вызван", log: OSLog.default, type: .debug)
         setupUI()
     }
     
     private func setupUI() {
-        title = viewModel.workoutName
+        title = "Тренировки"
         view.backgroundColor = .systemBackground
         
         view.addSubview(tableView)
         tableView.delegate = self
         tableView.dataSource = self
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "ExerciseCell")
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "WorkoutCell")
         
         NSLayoutConstraint.activate([
             tableView.topAnchor.constraint(equalTo: view.topAnchor),
@@ -44,35 +44,22 @@ class ExerciseListViewController: UIViewController {
 }
 
 // MARK: - UITableViewDataSource, UITableViewDelegate
-extension ExerciseListViewController: UITableViewDataSource, UITableViewDelegate {
+extension WorkoutListViewController: UITableViewDataSource, UITableViewDelegate {
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return viewModel.exercises.count
+        return viewModel.workouts.count
     }
     
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "ExerciseCell", for: indexPath)
-        cell.textLabel?.text = viewModel.exercises[indexPath.row].name
+        let cell = tableView.dequeueReusableCell(withIdentifier: "WorkoutCell", for: indexPath)
+        cell.textLabel?.text = viewModel.workouts[indexPath.row].name
         return cell
     }
     
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        let exercise = viewModel.exercises[indexPath.row]
-        
-        let cameraService = CameraService()
-        let poseDetectionService = PoseDetectionService()
-        let imageProcessingService = ImageProcessingService()
-        let visualizationService = VisualizationService()
-        
-        let exerciseExecutionViewModel = ExerciseExecutionViewModel(
-            exercise: exercise,
-            cameraService: cameraService,
-            poseDetectionService: poseDetectionService,
-            imageProcessingService: imageProcessingService,
-            visualizationService: visualizationService
-        )
-        
-        let controller = ExerciseExecutionViewController(viewModel: exerciseExecutionViewModel)
+        let workout = viewModel.workouts[indexPath.row]
+        let exerciseListViewModel = ExerciseListViewModel(workout: workout)
+        let controller = ExerciseListViewController(viewModel: exerciseListViewModel)
         navigationController?.pushViewController(controller, animated: true)
     }
 }
