@@ -1,6 +1,7 @@
 import UIKit
 import AVFoundation
 import MediaPipeTasksVision
+import CoreImage
 import os.log
 
 class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStreamDelegate {
@@ -66,13 +67,15 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     private var smoothedLandmarks: [NormalizedLandmark]?
     private var lastHipMidpoint: (x: Float, y: Float)? // Центр бёдер для ROI
     private var framesWithoutLandmarks = 0
-    private let maxFramesWithoutLandmarks = 10 // Увеличиваем порог для перезапуска
+    private let maxFramesWithoutLandmarks = 10 // Порог для перезапуска
     private var isPersonInFrame = false
     private var framesSincePersonReentered = 0
     private let stabilizationFrames = 5 // Период стабилизации после возвращения
     private let smoothingFactor: Float = 0.7 // Коэффициент сглаживания
     private let initialSmoothingFactor: Float = 0.9 // Более агрессивное сглаживание для первых кадров
     private var lastTimestamp: Int = 0 // Для строгого увеличения временных меток
+    private var lastImageDimensions: (width: Int, height: Int) = (1080, 1920) // Размеры изображения
+    private let scaleFactor: CGFloat = 1.5 // Коэффициент масштабирования для дальних объектов
     
     // MARK: - Инициализация
     init(exercise: Exercise) {
@@ -191,14 +194,10 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         
         let options = PoseLandmarkerOptions()
         options.baseOptions.modelAssetPath = modelPath
-        // Исправляем delegate для GPU (в зависимости от версии MediaPipe)
-        // Если версия MediaPipe >= 0.10.0, используем:
-        options.baseOptions.delegate = .GPU // Исправлено с .gpu на .GPU
-        // Если версия MediaPipe < 0.10.0, может потребоваться другой синтаксис, например:
-        // options.baseOptions.delegate = BaseOptions.Delegate.gpu
+        options.baseOptions.delegate = .GPU
         options.runningMode = .liveStream
         options.numPoses = 1
-        options.minPoseDetectionConfidence = 0.7
+        options.minPoseDetectionConfidence = 0.5 // Снижаем порог для лучшей детекции на расстоянии
         options.minTrackingConfidence = 0.7
         options.minPosePresenceConfidence = 0.7
         options.poseLandmarkerLiveStreamDelegate = self
@@ -334,9 +333,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
             os_log("ExerciseExecutionViewController: Долгая потеря ключевых точек, перезапускаем трекинг", log: OSLog.default, type: .debug)
             setupMediaPipe() // Перезапускаем MediaPipe
             framesWithoutLandmarks = 0
-            lastLandmarks = nil
-            smoothedLandmarks = nil
-            lastHipMidpoint = nil
+            // Не сбрасываем lastHipMidpoint, чтобы использовать его при восстановлении
             isPersonInFrame = false
             framesSincePersonReentered = 0
         }
@@ -391,7 +388,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         let screenWidth = view.bounds.width
         let screenHeight = view.bounds.height
         
-        for landmark in landmarks {
+        for (index, landmark) in landmarks.enumerated() {
             // Фильтруем точки с низкой видимостью или присутствием
             let visibility = landmark.visibility?.floatValue ?? 0.0
             let presence = landmark.presence?.floatValue ?? 0.0
@@ -404,7 +401,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
             
             // Пропускаем некорректные координаты
             if x < 0 || x > 1 || y < 0 || y > 1 {
-                os_log("ExerciseExecutionViewController: Недопустимые координаты: x=%f, y=%f", log: OSLog.default, type: .debug, x, y)
+                os_log("ExerciseExecutionViewController: Недопустимые координаты для точки %d: x=%f, y=%f", log: OSLog.default, type: .debug, index, x, y)
                 continue
             }
             
@@ -428,6 +425,71 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     @objc private func finishExercise() {
         navigationController?.popViewController(animated: true)
     }
+    
+    // MARK: - Функция: Масштабирование изображения
+    private func scaleImage(_ sampleBuffer: CMSampleBuffer, scaleFactor: CGFloat) -> CMSampleBuffer? {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            os_log("ExerciseExecutionViewController: Не удалось получить pixelBuffer из sampleBuffer", log: OSLog.default, type: .error)
+            return nil
+        }
+        
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        
+        let newWidth = Int(CGFloat(width) * scaleFactor)
+        let newHeight = Int(CGFloat(height) * scaleFactor)
+        
+        // Создаём CIImage из pixelBuffer
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        
+        // Масштабируем изображение
+        let scaledImage = ciImage.transformed(by: CGAffineTransform(scaleX: scaleFactor, y: scaleFactor))
+        
+        // Создаём новый pixelBuffer для масштабированного изображения
+        var newPixelBuffer: CVPixelBuffer?
+        let attributes: [String: Any] = [
+            kCVPixelBufferCGImageCompatibilityKey as String: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+            kCVPixelBufferWidthKey as String: newWidth,
+            kCVPixelBufferHeightKey as String: newHeight
+        ]
+        
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, newWidth, newHeight, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &newPixelBuffer)
+        guard status == kCVReturnSuccess, let outputPixelBuffer = newPixelBuffer else {
+            os_log("ExerciseExecutionViewController: Не удалось создать новый pixelBuffer", log: OSLog.default, type: .error)
+            return nil
+        }
+        
+        // Рендерим масштабированное изображение в новый pixelBuffer
+        let context = CIContext()
+        context.render(scaledImage, to: outputPixelBuffer)
+        
+        // Создаём новый CMSampleBuffer
+        var newSampleBuffer: CMSampleBuffer?
+        var timingInfo = CMSampleTimingInfo()
+        CMSampleBufferGetSampleTimingInfo(sampleBuffer, at: 0, timingInfoOut: &timingInfo)
+        
+        var formatDescription: CMFormatDescription?
+        CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: outputPixelBuffer, formatDescriptionOut: &formatDescription)
+        
+        let createStatus = CMSampleBufferCreateForImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: outputPixelBuffer,
+            dataReady: true,
+            makeDataReadyCallback: nil,
+            refcon: nil,
+            formatDescription: formatDescription!,
+            sampleTiming: &timingInfo,
+            sampleBufferOut: &newSampleBuffer
+        )
+        
+        guard createStatus == kCVReturnSuccess, let finalSampleBuffer = newSampleBuffer else {
+            os_log("ExerciseExecutionViewController: Не удалось создать новый sampleBuffer", log: OSLog.default, type: .error)
+            return nil
+        }
+        
+        return finalSampleBuffer
+    }
 }
 
 // MARK: - CameraManagerDelegate
@@ -445,9 +507,16 @@ extension ExerciseExecutionViewController: CameraManagerDelegate {
         
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
+        lastImageDimensions = (width: width, height: height)
         os_log("ExerciseExecutionViewController: Размеры изображения: %dx%d", log: OSLog.default, type: .debug, width, height)
         
-        guard let image = try? MPImage(sampleBuffer: sampleBuffer, orientation: orientation) else {
+        // Масштабируем изображение для улучшения детекции на расстоянии
+        guard let scaledSampleBuffer = scaleImage(sampleBuffer, scaleFactor: scaleFactor) else {
+            os_log("ExerciseExecutionViewController: Не удалось масштабировать изображение", log: OSLog.default, type: .error)
+            return
+        }
+        
+        guard let image = try? MPImage(sampleBuffer: scaledSampleBuffer, orientation: orientation) else {
             os_log("ExerciseExecutionViewController: Не удалось преобразовать CMSampleBuffer в MPImage", log: OSLog.default, type: .error)
             return
         }
