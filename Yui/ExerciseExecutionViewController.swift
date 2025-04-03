@@ -64,12 +64,14 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     // Свойства для кэширования, сглаживания и стабилизации
     private var lastLandmarks: [NormalizedLandmark]?
     private var smoothedLandmarks: [NormalizedLandmark]?
+    private var lastHipMidpoint: (x: Float, y: Float)? // Центр бёдер для ROI
     private var framesWithoutLandmarks = 0
-    private let maxFramesWithoutLandmarks = 5 // Перезапускаем трекинг после 5 кадров без точек
+    private let maxFramesWithoutLandmarks = 10 // Увеличиваем порог для перезапуска
     private var isPersonInFrame = false
     private var framesSincePersonReentered = 0
     private let stabilizationFrames = 5 // Период стабилизации после возвращения
-    private let smoothingFactor: Float = 0.7 // Коэффициент сглаживания (0.0 - 1.0)
+    private let smoothingFactor: Float = 0.7 // Коэффициент сглаживания
+    private let initialSmoothingFactor: Float = 0.9 // Более агрессивное сглаживание для первых кадров
     private var lastTimestamp: Int = 0 // Для строгого увеличения временных меток
     
     // MARK: - Инициализация
@@ -189,6 +191,11 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         
         let options = PoseLandmarkerOptions()
         options.baseOptions.modelAssetPath = modelPath
+        // Исправляем delegate для GPU (в зависимости от версии MediaPipe)
+        // Если версия MediaPipe >= 0.10.0, используем:
+        options.baseOptions.delegate = .GPU // Исправлено с .gpu на .GPU
+        // Если версия MediaPipe < 0.10.0, может потребоваться другой синтаксис, например:
+        // options.baseOptions.delegate = BaseOptions.Delegate.gpu
         options.runningMode = .liveStream
         options.numPoses = 1
         options.minPoseDetectionConfidence = 0.7
@@ -210,7 +217,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     private func setupPoseProcessor() {
         os_log("ExerciseExecutionViewController: Настройка PoseProcessor", log: OSLog.default, type: .debug)
         poseProcessor = PoseProcessor()
-        poseProcessor.onRepCountUpdated = { [weak self] count in
+        poseProcessor.onRepCountUpdated = { [weak self] (count: Int) in
             DispatchQueue.main.async {
                 self?.repsLabel.text = "Повторения: \(count)"
             }
@@ -248,15 +255,29 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         
         framesWithoutLandmarks = 0
         
+        // Вычисляем центр бёдер (midpoint of hips)
+        let leftHip = landmarks[23]
+        let rightHip = landmarks[24]
+        let hipMidpointX = (leftHip.x + rightHip.x) / 2
+        let hipMidpointY = (leftHip.y + rightHip.y) / 2
+        lastHipMidpoint = (x: hipMidpointX, y: hipMidpointY)
+        
         // Пропускаем обработку во время периода стабилизации
         if framesSincePersonReentered < stabilizationFrames {
             framesSincePersonReentered += 1
-            os_log("ExerciseExecutionViewController: Период стабилизации, пропускаем кадр %d/%d", log: OSLog.default, type: .debug, framesSincePersonReentered, stabilizationFrames)
+            os_log("ExerciseExecutionViewController: Период стабилизации, кадр %d/%d", log: OSLog.default, type: .debug, framesSincePersonReentered, stabilizationFrames)
+            
+            // Используем последние известные точки с более агрессивным сглаживанием
+            let predictedLandmarks = predictLandmarksDuringStabilization(landmarks)
+            DispatchQueue.main.async { [weak self] in
+                self?.instructionLabel.isHidden = true
+                self?.drawLandmarks(predictedLandmarks)
+            }
             return
         }
         
         // Сглаживаем ключевые точки
-        let smoothed = smoothLandmarks(landmarks)
+        let smoothed = smoothLandmarks(landmarks, isInitial: false)
         lastLandmarks = landmarks
         smoothedLandmarks = smoothed
         
@@ -268,6 +289,44 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         }
     }
     
+    // MARK: - Функция: Предсказание точек во время периода стабилизации
+    private func predictLandmarksDuringStabilization(_ currentLandmarks: [NormalizedLandmark]) -> [NormalizedLandmark] {
+        guard let last = lastLandmarks, last.count == currentLandmarks.count else {
+            return currentLandmarks
+        }
+        
+        // Используем центр бёдер для корректировки позиций
+        guard let hipMidpoint = lastHipMidpoint else {
+            return smoothLandmarks(currentLandmarks, isInitial: true)
+        }
+        
+        let lastLeftHip = last[23]
+        let lastRightHip = last[24]
+        let lastHipMidpointX = (lastLeftHip.x + lastRightHip.x) / 2
+        let lastHipMidpointY = (lastLeftHip.y + lastRightHip.y) / 2
+        
+        let deltaX = hipMidpoint.x - lastHipMidpointX
+        let deltaY = hipMidpoint.y - lastHipMidpointY
+        
+        var predicted: [NormalizedLandmark] = []
+        for i in 0..<last.count {
+            let lastPoint = last[i]
+            let newX = lastPoint.x + deltaX
+            let newY = lastPoint.y + deltaY
+            let predictedLandmark = NormalizedLandmark(
+                x: newX,
+                y: newY,
+                z: lastPoint.z,
+                visibility: lastPoint.visibility,
+                presence: lastPoint.presence
+            )
+            predicted.append(predictedLandmark)
+        }
+        
+        // Применяем более агрессивное сглаживание
+        return smoothLandmarks(predicted, isInitial: true)
+    }
+    
     // MARK: - Функция: Обработка потери ключевых точек
     private func handleLandmarkLoss() {
         framesWithoutLandmarks += 1
@@ -277,6 +336,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
             framesWithoutLandmarks = 0
             lastLandmarks = nil
             smoothedLandmarks = nil
+            lastHipMidpoint = nil
             isPersonInFrame = false
             framesSincePersonReentered = 0
         }
@@ -286,10 +346,11 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     }
     
     // MARK: - Функция: Сглаживание ключевых точек
-    private func smoothLandmarks(_ landmarks: [NormalizedLandmark]) -> [NormalizedLandmark] {
+    private func smoothLandmarks(_ landmarks: [NormalizedLandmark], isInitial: Bool) -> [NormalizedLandmark] {
         guard !landmarks.isEmpty else { return landmarks }
         
         var smoothed: [NormalizedLandmark] = []
+        let factor = isInitial ? initialSmoothingFactor : smoothingFactor
         
         if smoothedLandmarks == nil || smoothedLandmarks!.count != landmarks.count {
             smoothedLandmarks = landmarks
@@ -300,9 +361,9 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
             let current = landmarks[i]
             let previous = smoothedLandmarks![i]
             
-            let smoothedX = smoothingFactor * previous.x + (1 - smoothingFactor) * current.x
-            let smoothedY = smoothingFactor * previous.y + (1 - smoothingFactor) * current.y
-            let smoothedZ = smoothingFactor * previous.z + (1 - smoothingFactor) * current.z
+            let smoothedX = factor * previous.x + (1 - factor) * current.x
+            let smoothedY = factor * previous.y + (1 - factor) * current.y
+            let smoothedZ = factor * previous.z + (1 - factor) * current.z
             
             let smoothedLandmark = NormalizedLandmark(
                 x: smoothedX,
@@ -331,9 +392,10 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         let screenHeight = view.bounds.height
         
         for landmark in landmarks {
-            // Фильтруем точки с низкой видимостью
+            // Фильтруем точки с низкой видимостью или присутствием
             let visibility = landmark.visibility?.floatValue ?? 0.0
-            if visibility < 0.7 {
+            let presence = landmark.presence?.floatValue ?? 0.0
+            if visibility < 0.7 || presence < 0.7 {
                 continue
             }
             
