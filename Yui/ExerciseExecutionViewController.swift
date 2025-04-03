@@ -61,6 +61,17 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
     private var isPoseLandmarkerSetup = false
     private let landmarksLayer = CALayer()
     
+    // Свойства для кэширования, сглаживания и стабилизации
+    private var lastLandmarks: [NormalizedLandmark]?
+    private var smoothedLandmarks: [NormalizedLandmark]?
+    private var framesWithoutLandmarks = 0
+    private let maxFramesWithoutLandmarks = 5 // Перезапускаем трекинг после 5 кадров без точек
+    private var isPersonInFrame = false
+    private var framesSincePersonReentered = 0
+    private let stabilizationFrames = 5 // Период стабилизации после возвращения
+    private let smoothingFactor: Float = 0.7 // Коэффициент сглаживания (0.0 - 1.0)
+    private var lastTimestamp: Int = 0 // Для строгого увеличения временных меток
+    
     // MARK: - Инициализация
     init(exercise: Exercise) {
         self.exercise = exercise
@@ -180,9 +191,9 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         options.baseOptions.modelAssetPath = modelPath
         options.runningMode = .liveStream
         options.numPoses = 1
-        options.minPoseDetectionConfidence = 0.5
-        options.minTrackingConfidence = 0.5
-        options.minPosePresenceConfidence = 0.5
+        options.minPoseDetectionConfidence = 0.7
+        options.minTrackingConfidence = 0.7
+        options.minPosePresenceConfidence = 0.7
         options.poseLandmarkerLiveStreamDelegate = self
         
         do {
@@ -216,17 +227,94 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         guard let result = result, error == nil else {
             os_log("ExerciseExecutionViewController: Ошибка обработки MediaPipe: %@", log: OSLog.default, type: .error, error?.localizedDescription ?? "Неизвестная ошибка")
             DispatchQueue.main.async { [weak self] in
-                self?.instructionLabel.isHidden = false
+                self?.handleLandmarkLoss()
             }
             return
         }
+        
+        guard let landmarks = result.landmarks.first else {
+            os_log("ExerciseExecutionViewController: Нет обнаруженных ключевых точек", log: OSLog.default, type: .debug)
+            DispatchQueue.main.async { [weak self] in
+                self?.handleLandmarkLoss()
+            }
+            return
+        }
+        
+        // Обновляем состояние присутствия человека
+        if !isPersonInFrame {
+            isPersonInFrame = true
+            framesSincePersonReentered = 0
+        }
+        
+        framesWithoutLandmarks = 0
+        
+        // Пропускаем обработку во время периода стабилизации
+        if framesSincePersonReentered < stabilizationFrames {
+            framesSincePersonReentered += 1
+            os_log("ExerciseExecutionViewController: Период стабилизации, пропускаем кадр %d/%d", log: OSLog.default, type: .debug, framesSincePersonReentered, stabilizationFrames)
+            return
+        }
+        
+        // Сглаживаем ключевые точки
+        let smoothed = smoothLandmarks(landmarks)
+        lastLandmarks = landmarks
+        smoothedLandmarks = smoothed
         
         poseProcessor.processPoseLandmarks(result)
         
         DispatchQueue.main.async { [weak self] in
             self?.instructionLabel.isHidden = true
-            self?.drawLandmarks(result.landmarks.first)
+            self?.drawLandmarks(smoothed)
         }
+    }
+    
+    // MARK: - Функция: Обработка потери ключевых точек
+    private func handleLandmarkLoss() {
+        framesWithoutLandmarks += 1
+        if framesWithoutLandmarks >= maxFramesWithoutLandmarks {
+            os_log("ExerciseExecutionViewController: Долгая потеря ключевых точек, перезапускаем трекинг", log: OSLog.default, type: .debug)
+            setupMediaPipe() // Перезапускаем MediaPipe
+            framesWithoutLandmarks = 0
+            lastLandmarks = nil
+            smoothedLandmarks = nil
+            isPersonInFrame = false
+            framesSincePersonReentered = 0
+        }
+        
+        instructionLabel.isHidden = false
+        drawLandmarks(smoothedLandmarks ?? lastLandmarks) // Используем последние известные точки
+    }
+    
+    // MARK: - Функция: Сглаживание ключевых точек
+    private func smoothLandmarks(_ landmarks: [NormalizedLandmark]) -> [NormalizedLandmark] {
+        guard !landmarks.isEmpty else { return landmarks }
+        
+        var smoothed: [NormalizedLandmark] = []
+        
+        if smoothedLandmarks == nil || smoothedLandmarks!.count != landmarks.count {
+            smoothedLandmarks = landmarks
+            return landmarks
+        }
+        
+        for i in 0..<landmarks.count {
+            let current = landmarks[i]
+            let previous = smoothedLandmarks![i]
+            
+            let smoothedX = smoothingFactor * previous.x + (1 - smoothingFactor) * current.x
+            let smoothedY = smoothingFactor * previous.y + (1 - smoothingFactor) * current.y
+            let smoothedZ = smoothingFactor * previous.z + (1 - smoothingFactor) * current.z
+            
+            let smoothedLandmark = NormalizedLandmark(
+                x: smoothedX,
+                y: smoothedY,
+                z: smoothedZ,
+                visibility: current.visibility,
+                presence: current.presence
+            )
+            smoothed.append(smoothedLandmark)
+        }
+        
+        return smoothed
     }
     
     // MARK: - Функция: Отрисовка ключевых точек
@@ -245,7 +333,7 @@ class ExerciseExecutionViewController: UIViewController, PoseLandmarkerLiveStrea
         for landmark in landmarks {
             // Фильтруем точки с низкой видимостью
             let visibility = landmark.visibility?.floatValue ?? 0.0
-            if visibility < 0.5 {
+            if visibility < 0.7 {
                 continue
             }
             
@@ -303,7 +391,9 @@ extension ExerciseExecutionViewController: CameraManagerDelegate {
         }
         
         do {
-            let timestampInMilliseconds = Int(timestamp)
+            // Гарантируем строго возрастающие временные метки
+            let timestampInMilliseconds = max(lastTimestamp + 1, Int(timestamp))
+            lastTimestamp = timestampInMilliseconds
             try poseLandmarker?.detectAsync(image: image, timestampInMilliseconds: timestampInMilliseconds)
         } catch {
             os_log("ExerciseExecutionViewController: Ошибка обработки кадра: %@", log: OSLog.default, type: .error, error.localizedDescription)

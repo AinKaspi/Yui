@@ -7,14 +7,22 @@ class PoseProcessor {
     private var isSquatting = false
     private var previousHipY: Float?
     private var previousKneeY: Float?
+    private var framesWithoutPerson = 0
+    private let resetDelayFrames = 10 // Задержка перед сбросом счётчика
     
     var onRepCountUpdated: ((Int) -> Void)?
     
     func processPoseLandmarks(_ result: PoseLandmarkerResult) {
         guard let landmarks = result.landmarks.first else {
             os_log("PoseProcessor: Нет обнаруженных ключевых точек", log: OSLog.default, type: .debug)
+            framesWithoutPerson += 1
+            if framesWithoutPerson >= resetDelayFrames {
+                resetState()
+            }
             return
         }
+        
+        framesWithoutPerson = 0
         
         let requiredLandmarks = [23, 24, 25, 26]
         var allVisible = true
@@ -23,7 +31,7 @@ class PoseProcessor {
             let x = landmarks[index].x
             let y = landmarks[index].y
             os_log("PoseProcessor: Точка %d - x: %f, y: %f, visibility: %f", log: OSLog.default, type: .debug, index, x, y, visibility)
-            if visibility < 0.5 {
+            if visibility < 0.7 {
                 os_log("PoseProcessor: Ключевая точка %d не видна, visibility: %f", log: OSLog.default, type: .debug, index, visibility)
                 allVisible = false
             }
@@ -63,5 +71,16 @@ class PoseProcessor {
         
         self.previousHipY = hipY
         self.previousKneeY = kneeY
+    }
+    
+    // MARK: - Функция: Сброс состояния
+    private func resetState() {
+        os_log("PoseProcessor: Сброс состояния после %d кадров без человека", log: OSLog.default, type: .debug, resetDelayFrames)
+        repCount = 0
+        isSquatting = false
+        previousHipY = nil
+        previousKneeY = nil
+        framesWithoutPerson = 0
+        onRepCountUpdated?(repCount)
     }
 }
