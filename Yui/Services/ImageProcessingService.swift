@@ -1,74 +1,116 @@
 import AVFoundation
 import CoreImage
+import UIKit
 import os.log
 
+// MARK: - Протокол ImageProcessingServiceProtocol
 protocol ImageProcessingServiceProtocol {
-    func scaleImage(_ sampleBuffer: CMSampleBuffer, scaleFactor: CGFloat) -> CMSampleBuffer?
     func normalizeImage(_ sampleBuffer: CMSampleBuffer) -> CMSampleBuffer?
 }
 
 class ImageProcessingService: ImageProcessingServiceProtocol {
-    private let ciContext = CIContext()
+    // MARK: - Константы
+    private let targetSize = CGSize(width: 256, height: 256) // Входной размер для MediaPipe Pose Landmarker
+    private let ciContext = CIContext(options: nil)
     
-    func scaleImage(_ sampleBuffer: CMSampleBuffer, scaleFactor: CGFloat) -> CMSampleBuffer? {
+    // MARK: - Нормализация изображения
+    func normalizeImage(_ sampleBuffer: CMSampleBuffer) -> CMSampleBuffer? {
+        os_log("ImageProcessingService: normalizeImage вызван", log: OSLog.default, type: .debug)
+        
+        // 1. Извлечение CVPixelBuffer из CMSampleBuffer
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            os_log("ImageProcessingService: Не удалось получить pixelBuffer из sampleBuffer", log: OSLog.default, type: .error)
+            os_log("ImageProcessingService: Не удалось извлечь CVPixelBuffer из CMSampleBuffer", log: OSLog.default, type: .error)
             return nil
         }
         
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
+        // 2. Преобразование в CIImage
+        var ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         
-        let newWidth = Int(CGFloat(width) * scaleFactor)
-        let newHeight = Int(CGFloat(height) * scaleFactor)
+        // 3. Масштабирование изображения до целевого размера (256x256)
+        let scaleX = targetSize.width / ciImage.extent.width
+        let scaleY = targetSize.height / ciImage.extent.height
+        let scale = min(scaleX, scaleY) // Сохраняем пропорции
+        ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let scaledImage = ciImage.transformed(by: CGAffineTransform(scaleX: scaleFactor, y: scaleFactor))
+        // 4. Центрирование изображения (если после масштабирования размер не совпадает с целевым)
+        let offsetX = (targetSize.width - ciImage.extent.width) / 2
+        let offsetY = (targetSize.height - ciImage.extent.height) / 2
+        ciImage = ciImage.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
         
+        // 5. Обрезка до целевого размера
+        ciImage = ciImage.cropped(to: CGRect(origin: .zero, size: targetSize))
+        
+        // 6. Преобразование цветового пространства в RGB (MediaPipe ожидает RGB)
+        if let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) {
+            ciImage = ciImage.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: 1, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: 1, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: 1, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+            ]).settingProperties([kCIImageColorSpace: colorSpace])
+        }
+        
+        // 7. Нормализация значений пикселей (диапазон [0, 1])
+        let normalizedImage = ciImage.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 1/255, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 1/255, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 1/255, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+        ])
+        
+        // 8. Преобразование обратно в CVPixelBuffer
         var newPixelBuffer: CVPixelBuffer?
         let attributes: [String: Any] = [
             kCVPixelBufferCGImageCompatibilityKey as String: true,
             kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
-            kCVPixelBufferWidthKey as String: newWidth,
-            kCVPixelBufferHeightKey as String: newHeight
+            kCVPixelBufferWidthKey as String: Int(targetSize.width),
+            kCVPixelBufferHeightKey as String: Int(targetSize.height),
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
         ]
         
-        let status = CVPixelBufferCreate(kCFAllocatorDefault, newWidth, newHeight, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &newPixelBuffer)
-        guard status == kCVReturnSuccess, let outputPixelBuffer = newPixelBuffer else {
-            os_log("ImageProcessingService: Не удалось создать новый pixelBuffer", log: OSLog.default, type: .error)
+        CVPixelBufferCreate(kCFAllocatorDefault,
+                           Int(targetSize.width),
+                           Int(targetSize.height),
+                           kCVPixelFormatType_32BGRA,
+                           attributes as CFDictionary,
+                           &newPixelBuffer)
+        
+        guard let outputPixelBuffer = newPixelBuffer else {
+            os_log("ImageProcessingService: Не удалось создать новый CVPixelBuffer", log: OSLog.default, type: .error)
             return nil
         }
         
-        ciContext.render(scaledImage, to: outputPixelBuffer)
+        ciContext.render(normalizedImage, to: outputPixelBuffer)
         
+        // 9. Создание нового CMSampleBuffer
         var newSampleBuffer: CMSampleBuffer?
         var timingInfo = CMSampleTimingInfo()
         CMSampleBufferGetSampleTimingInfo(sampleBuffer, at: 0, timingInfoOut: &timingInfo)
         
         var formatDescription: CMFormatDescription?
-        CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: outputPixelBuffer, formatDescriptionOut: &formatDescription)
+        CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
+                                                    imageBuffer: outputPixelBuffer,
+                                                    formatDescriptionOut: &formatDescription)
         
-        let createStatus = CMSampleBufferCreateForImageBuffer(
-            allocator: kCFAllocatorDefault,
-            imageBuffer: outputPixelBuffer,
-            dataReady: true,
-            makeDataReadyCallback: nil,
-            refcon: nil,
-            formatDescription: formatDescription!,
-            sampleTiming: &timingInfo,
-            sampleBufferOut: &newSampleBuffer
-        )
-        
-        guard createStatus == kCVReturnSuccess, let finalSampleBuffer = newSampleBuffer else {
-            os_log("ImageProcessingService: Не удалось создать новый sampleBuffer", log: OSLog.default, type: .error)
+        guard let finalFormatDescription = formatDescription else {
+            os_log("ImageProcessingService: Не удалось создать CMFormatDescription", log: OSLog.default, type: .error)
             return nil
         }
         
-        return finalSampleBuffer
-    }
-    
-    func normalizeImage(_ sampleBuffer: CMSampleBuffer) -> CMSampleBuffer? {
-        // Реализация нормализации будет добавлена позже
-        return sampleBuffer
+        CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault,
+                                                imageBuffer: outputPixelBuffer,
+                                                formatDescription: finalFormatDescription,
+                                                sampleTiming: &timingInfo,
+                                                sampleBufferOut: &newSampleBuffer)
+        
+        guard let resultSampleBuffer = newSampleBuffer else {
+            os_log("ImageProcessingService: Не удалось создать новый CMSampleBuffer", log: OSLog.default, type: .error)
+            return nil
+        }
+        
+        os_log("ImageProcessingService: Изображение успешно нормализовано", log: OSLog.default, type: .debug)
+        return resultSampleBuffer
     }
 }

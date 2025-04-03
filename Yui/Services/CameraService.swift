@@ -2,174 +2,268 @@ import AVFoundation
 import UIKit
 import os.log
 
-protocol CameraServiceProtocol {
-    func setupCamera(completion: @escaping (AVCaptureVideoPreviewLayer) -> Void)
-    func startSession()
-    func stopSession()
-    func updatePreviewLayerFrame(_ frame: CGRect)
-    func updateOrientation(_ orientation: UIDeviceOrientation)
-    func switchResolution(to preset: AVCaptureSession.Preset)
+// MARK: - Ошибки CameraService
+enum CameraServiceError: Error {
+    case cameraNotAvailable
+    case inputSetupFailed(Error)
+    case outputSetupFailed
+    case sessionConfigurationFailed
+    case permissionDenied
 }
 
-class CameraService: NSObject, CameraServiceProtocol {
-    private let captureSession = AVCaptureSession()
-    private var videoOutput: AVCaptureVideoDataOutput?
-    private var previewLayer: AVCaptureVideoPreviewLayer?
-    private var currentDevice: AVCaptureDevice?
-    private var currentOrientation: UIImage.Orientation = .right
-    private let sessionQueue = DispatchQueue(label: "com.cameraService.sessionQueue")
-    private let bufferQueue = DispatchQueue(label: "com.cameraService.bufferQueue", qos: .userInitiated)
-    private var isRunning = false
+// MARK: - Протокол CameraServiceProtocol
+protocol CameraServiceProtocol {
+    var onFrameCaptured: ((CMSampleBuffer, UIImage.Orientation, Int64) -> Void)? { get set }
+    var onError: ((CameraServiceError) -> Void)? { get set }
+    var previewLayer: AVCaptureVideoPreviewLayer { get }
     
+    func setupCamera(completion: @escaping (Result<AVCaptureVideoPreviewLayer, CameraServiceError>) -> Void)
+    func startSession()
+    func stopSession()
+    func pauseSession()
+    func resumeSession()
+    func updateOrientation(_ orientation: UIDeviceOrientation)
+    func updatePreviewLayerFrame(_ frame: CGRect)
+    func configureCameraSettings(frameRate: Float?, resolution: AVCaptureSession.Preset?)
+}
+
+class CameraService: NSObject, CameraServiceProtocol, AVCaptureVideoDataOutputSampleBufferDelegate {
+    // MARK: - Свойства
     var onFrameCaptured: ((CMSampleBuffer, UIImage.Orientation, Int64) -> Void)?
+    var onError: ((CameraServiceError) -> Void)?
     
-    private var currentPreset: AVCaptureSession.Preset = .hd1280x720
+    private let captureSession = AVCaptureSession()
+    private let sessionQueue = DispatchQueue(label: "com.yui.camera.sessionQueue")
+    private var videoDeviceInput: AVCaptureDeviceInput?
+    private let videoDataOutput = AVCaptureVideoDataOutput()
+    private var previewLayer: AVCaptureVideoPreviewLayer!
     
+    private var deviceOrientation: UIDeviceOrientation = .portrait
+    private var isSessionPaused: Bool = false
+    
+    // MARK: - Инициализация
     override init() {
         super.init()
+        previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
+        previewLayer.videoGravity = .resizeAspectFill
     }
     
-    func setupCamera(completion: @escaping (AVCaptureVideoPreviewLayer) -> Void) {
-        sessionQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            self.captureSession.beginConfiguration()
-            
-            guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
-                os_log("CameraService: Не удалось найти фронтальную камеру", log: OSLog.default, type: .error)
-                return
+    // MARK: - Настройка камеры
+    func setupCamera(completion: @escaping (Result<AVCaptureVideoPreviewLayer, CameraServiceError>) -> Void) {
+        // Проверка доступа к камере
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            sessionQueue.async { [weak self] in
+                self?.configureSession(completion: completion)
             }
-            self.currentDevice = device
-            
-            do {
-                let input = try AVCaptureDeviceInput(device: device)
-                if self.captureSession.canAddInput(input) {
-                    self.captureSession.addInput(input)
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                guard let self = self else { return }
+                if granted {
+                    self.sessionQueue.async {
+                        self.configureSession(completion: completion)
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        completion(.failure(.permissionDenied))
+                        self.onError?(.permissionDenied)
+                    }
                 }
-            } catch {
-                os_log("CameraService: Ошибка настройки входного устройства: %@", log: OSLog.default, type: .error, error.localizedDescription)
-                return
             }
-            
-            if self.captureSession.canSetSessionPreset(self.currentPreset) {
-                self.captureSession.sessionPreset = self.currentPreset
-            }
-            
-            let videoOutput = AVCaptureVideoDataOutput()
-            videoOutput.alwaysDiscardsLateVideoFrames = true
-            videoOutput.videoSettings = [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-            ]
-            videoOutput.setSampleBufferDelegate(self, queue: self.bufferQueue)
-            
-            if self.captureSession.canAddOutput(videoOutput) {
-                self.captureSession.addOutput(videoOutput)
-                self.videoOutput = videoOutput
-            }
-            
-            if let connection = videoOutput.connection(with: .video), connection.isVideoOrientationSupported {
-                connection.videoOrientation = .portrait
-            }
-            
-            self.captureSession.commitConfiguration()
-            
-            let previewLayer = AVCaptureVideoPreviewLayer(session: self.captureSession)
-            previewLayer.videoGravity = .resizeAspectFill
-            self.previewLayer = previewLayer
-            
+        case .denied, .restricted:
             DispatchQueue.main.async {
-                completion(previewLayer)
+                completion(.failure(.permissionDenied))
+                self.onError?(.permissionDenied)
+            }
+        @unknown default:
+            DispatchQueue.main.async {
+                completion(.failure(.permissionDenied))
+                self.onError?(.permissionDenied)
             }
         }
     }
     
-    func switchResolution(to preset: AVCaptureSession.Preset) {
-        sessionQueue.async { [weak self] in
-            guard let self = self else { return }
-            guard self.captureSession.canSetSessionPreset(preset) else {
-                os_log("CameraService: Не удалось установить разрешение %@", log: OSLog.default, type: .error, preset.rawValue)
-                return
+    private func configureSession(completion: @escaping (Result<AVCaptureVideoPreviewLayer, CameraServiceError>) -> Void) {
+        guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
+            os_log("CameraService: Не удалось найти фронтальную камеру", log: OSLog.default, type: .error)
+            DispatchQueue.main.async {
+                completion(.failure(.cameraNotAvailable))
+                self.onError?(.cameraNotAvailable)
             }
-            
-            self.captureSession.beginConfiguration()
-            self.currentPreset = preset
-            self.captureSession.sessionPreset = preset
-            self.captureSession.commitConfiguration()
-            os_log("CameraService: Разрешение изменено на %@", log: OSLog.default, type: .debug, preset.rawValue)
+            return
+        }
+        
+        do {
+            let videoDeviceInput = try AVCaptureDeviceInput(device: videoDevice)
+            self.videoDeviceInput = videoDeviceInput
+        } catch {
+            os_log("CameraService: Не удалось создать AVCaptureDeviceInput: %@", log: OSLog.default, type: .error, error.localizedDescription)
+            DispatchQueue.main.async {
+                completion(.failure(.inputSetupFailed(error)))
+                self.onError?(.inputSetupFailed(error))
+            }
+            return
+        }
+        
+        captureSession.beginConfiguration()
+        
+        // Настройка входа
+        if captureSession.canAddInput(videoDeviceInput!) {
+            captureSession.addInput(videoDeviceInput!)
+        } else {
+            os_log("CameraService: Не удалось добавить videoDeviceInput в сессию", log: OSLog.default, type: .error)
+            captureSession.commitConfiguration()
+            DispatchQueue.main.async {
+                completion(.failure(.sessionConfigurationFailed))
+                self.onError?(.sessionConfigurationFailed)
+            }
+            return
+        }
+        
+        // Настройка выхода
+        videoDataOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "com.yui.camera.videoQueue"))
+        videoDataOutput.alwaysDiscardsLateVideoFrames = true
+        
+        if captureSession.canAddOutput(videoDataOutput) {
+            captureSession.addOutput(videoDataOutput)
+        } else {
+            os_log("CameraService: Не удалось добавить videoDataOutput в сессию", log: OSLog.default, type: .error)
+            captureSession.commitConfiguration()
+            DispatchQueue.main.async {
+                completion(.failure(.sessionConfigurationFailed))
+                self.onError?(.sessionConfigurationFailed)
+            }
+            return
+        }
+        
+        // Настройка ориентации видео
+        if let connection = videoDataOutput.connection(with: .video) {
+            connection.isEnabled = true
+            connection.videoOrientation = .portrait
+        }
+        
+        captureSession.commitConfiguration()
+        
+        DispatchQueue.main.async {
+            completion(.success(self.previewLayer))
         }
     }
     
+    // MARK: - Управление сессией
     func startSession() {
         sessionQueue.async { [weak self] in
-            guard let self = self, !self.isRunning else { return }
-            self.captureSession.startRunning()
-            self.isRunning = true
-            os_log("CameraService: Сессия запущена", log: OSLog.default, type: .debug)
+            guard let self = self else { return }
+            if !self.captureSession.isRunning {
+                self.captureSession.startRunning()
+                self.isSessionPaused = false
+                os_log("CameraService: Сессия камеры запущена", log: OSLog.default, type: .debug)
+            }
         }
     }
     
     func stopSession() {
         sessionQueue.async { [weak self] in
-            guard let self = self, self.isRunning else { return }
-            self.captureSession.stopRunning()
-            self.isRunning = false
-            os_log("CameraService: Сессия остановлена", log: OSLog.default, type: .debug)
+            guard let self = self else { return }
+            if self.captureSession.isRunning {
+                self.captureSession.stopRunning()
+                self.isSessionPaused = false
+                os_log("CameraService: Сессия камеры остановлена", log: OSLog.default, type: .debug)
+            }
         }
     }
     
-    func updatePreviewLayerFrame(_ frame: CGRect) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self, let previewLayer = self.previewLayer else { return }
-            previewLayer.frame = frame
-            os_log("CameraService: Обновление frame для previewLayer: %@", log: OSLog.default, type: .debug, NSCoder.string(for: frame))
-        }
-    }
-    
-    func updateOrientation(_ orientation: UIDeviceOrientation) {
-        switch orientation {
-        case .portrait:
-            currentOrientation = .right
-        case .portraitUpsideDown:
-            currentOrientation = .left
-        case .landscapeLeft:
-            currentOrientation = .up
-        case .landscapeRight:
-            currentOrientation = .down
-        default:
-            currentOrientation = .right
-        }
-        
+    func pauseSession() {
         sessionQueue.async { [weak self] in
-            guard let self = self, let connection = self.videoOutput?.connection(with: .video), connection.isVideoOrientationSupported else { return }
-            switch self.currentOrientation {
-            case .right:
+            guard let self = self else { return }
+            if self.captureSession.isRunning && !self.isSessionPaused {
+                self.captureSession.stopRunning()
+                self.isSessionPaused = true
+                os_log("CameraService: Сессия камеры приостановлена", log: OSLog.default, type: .debug)
+            }
+        }
+    }
+    
+    func resumeSession() {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            if !self.captureSession.isRunning && self.isSessionPaused {
+                self.captureSession.startRunning()
+                self.isSessionPaused = false
+                os_log("CameraService: Сессия камеры возобновлена", log: OSLog.default, type: .debug)
+            }
+        }
+    }
+    
+    // MARK: - Обновление параметров
+    func updateOrientation(_ orientation: UIDeviceOrientation) {
+        deviceOrientation = orientation
+        if let connection = previewLayer.connection, connection.isVideoOrientationSupported {
+            switch orientation {
+            case .portrait:
                 connection.videoOrientation = .portrait
-            case .left:
+            case .portraitUpsideDown:
                 connection.videoOrientation = .portraitUpsideDown
-            case .up:
+            case .landscapeLeft:
                 connection.videoOrientation = .landscapeRight
-            case .down:
+            case .landscapeRight:
                 connection.videoOrientation = .landscapeLeft
             default:
                 connection.videoOrientation = .portrait
             }
-            os_log("CameraService: Ориентация устройства: %@", log: OSLog.default, type: .debug, String(describing: self.currentOrientation))
         }
     }
-}
-
-extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
+    
+    func updatePreviewLayerFrame(_ frame: CGRect) {
+        previewLayer.frame = frame
+    }
+    
+    func configureCameraSettings(frameRate: Float?, resolution: AVCaptureSession.Preset?) {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.videoDeviceInput?.device else { return }
+            
+            self.captureSession.beginConfiguration()
+            
+            // Настройка разрешения
+            if let resolution = resolution, self.captureSession.canSetSessionPreset(resolution) {
+                self.captureSession.sessionPreset = resolution
+                os_log("CameraService: Установлено разрешение: %@", log: OSLog.default, type: .debug, resolution.rawValue)
+            }
+            
+            // Настройка частоты кадров
+            if let frameRate = frameRate {
+                do {
+                    try device.lockForConfiguration()
+                    let frameDuration = CMTime(value: 1, timescale: CMTimeScale(frameRate))
+                    device.activeVideoMinFrameDuration = frameDuration
+                    device.activeVideoMaxFrameDuration = frameDuration
+                    device.unlockForConfiguration()
+                    os_log("CameraService: Установлена частота кадров: %f fps", log: OSLog.default, type: .debug, frameRate)
+                } catch {
+                    os_log("CameraService: Не удалось установить частоту кадров: %@", log: OSLog.default, type: .error, error.localizedDescription)
+                }
+            }
+            
+            self.captureSession.commitConfiguration()
+        }
+    }
+    
+    // MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            os_log("CameraService: Не удалось получить pixelBuffer", log: OSLog.default, type: .error)
-            return
+        let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).value
+        let orientation: UIImage.Orientation
+        switch deviceOrientation {
+        case .portrait:
+            orientation = .right
+        case .portraitUpsideDown:
+            orientation = .left
+        case .landscapeLeft:
+            orientation = .up
+        case .landscapeRight:
+            orientation = .down
+        default:
+            orientation = .right
         }
         
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        os_log("CameraService: Размеры изображения: %dx%d", log: OSLog.default, type: .debug, width, height)
-        
-        let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).value
-        onFrameCaptured?(sampleBuffer, currentOrientation, timestamp)
+        onFrameCaptured?(sampleBuffer, orientation, timestamp)
     }
 }

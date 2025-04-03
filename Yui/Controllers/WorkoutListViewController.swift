@@ -2,7 +2,9 @@ import UIKit
 import os.log
 
 class WorkoutListViewController: UIViewController {
-    private let viewModel: WorkoutListViewModelProtocol
+    // MARK: - Свойства
+    private let viewModel: WorkoutListViewModel
+    private let storageService: StorageServiceProtocol
     
     private let tableView: UITableView = {
         let tableView = UITableView()
@@ -10,8 +12,10 @@ class WorkoutListViewController: UIViewController {
         return tableView
     }()
     
-    init(viewModel: WorkoutListViewModelProtocol) {
+    // MARK: - Инициализация
+    init(viewModel: WorkoutListViewModel, storageService: StorageServiceProtocol) {
         self.viewModel = viewModel
+        self.storageService = storageService
         super.init(nibName: nil, bundle: nil)
     }
     
@@ -19,15 +23,22 @@ class WorkoutListViewController: UIViewController {
         fatalError("init(coder:) has not been implemented")
     }
     
+    // MARK: - Жизненный цикл
     override func viewDidLoad() {
         super.viewDidLoad()
         os_log("WorkoutListViewController: viewDidLoad вызван", log: OSLog.default, type: .debug)
         setupUI()
     }
     
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        tableView.reloadData() // Обновляем таблицу при возвращении
+    }
+    
+    // MARK: - Настройка UI
     private func setupUI() {
         title = "Тренировки"
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = .white
         
         view.addSubview(tableView)
         tableView.delegate = self
@@ -43,23 +54,27 @@ class WorkoutListViewController: UIViewController {
     }
 }
 
-// MARK: - UITableViewDataSource, UITableViewDelegate
-extension WorkoutListViewController: UITableViewDataSource, UITableViewDelegate {
+// MARK: - UITableViewDataSource
+extension WorkoutListViewController: UITableViewDataSource {
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return viewModel.workouts.count
+        return viewModel.numberOfWorkouts
     }
     
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "WorkoutCell", for: indexPath)
-        cell.textLabel?.text = viewModel.workouts[indexPath.row].name
+        cell.textLabel?.text = viewModel.workoutName(at: indexPath.row)
         return cell
     }
-    
+}
+
+// MARK: - UITableViewDelegate
+extension WorkoutListViewController: UITableViewDelegate {
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        let workout = viewModel.workouts[indexPath.row]
+        
+        let workout = viewModel.workout(at: indexPath.row)
         let exerciseListViewModel = ExerciseListViewModel(workout: workout)
-        let controller = ExerciseListViewController(viewModel: exerciseListViewModel)
-        navigationController?.pushViewController(controller, animated: true)
+        let exerciseListVC = ExerciseListViewController(viewModel: exerciseListViewModel, workout: workout, storageService: storageService)
+        navigationController?.pushViewController(exerciseListVC, animated: true)
     }
 }
