@@ -30,7 +30,7 @@ class PoseProcessor {
         let angle = acos(cosAngle) * 180 / .pi
         
         guard let previousAngle = previousKneeAngle else {
-            previousKneeAngle = angle
+            previousKneeAngle = Float(angle)
             return
         }
         
@@ -43,6 +43,6 @@ class PoseProcessor {
             os_log("PoseProcessor: Обнаружено повторение, общее количество: %d", log: OSLog.default, type: .debug, repCount)
         }
         
-        previousKneeAngle = angle
+        previousKneeAngle = Float(angle)
     }
 }

@@ -1,4 +1,5 @@
 import AVFoundation
+import UIKit
 import os.log
 
 protocol CameraServiceProtocol {
@@ -120,7 +121,7 @@ class CameraService: NSObject, CameraServiceProtocol {
         DispatchQueue.main.async { [weak self] in
             guard let self = self, let previewLayer = self.previewLayer else { return }
             previewLayer.frame = frame
-            os_log("CameraService: Обновление frame для previewLayer: %@", log: OSLog.default, type: .debug, NSStringFromCGRect(frame))
+            os_log("CameraService: Обновление frame для previewLayer: %@", log: OSLog.default, type: .debug, NSCoder.string(for: frame))
         }
     }
     
