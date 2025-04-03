@@ -49,7 +49,7 @@ class VisualizationService: VisualizationServiceProtocol {
             } else {
                 color = isActive ? activeColor : inactiveColor
             }
-            return VisualLandmark(position: position, visibility: landmark.visibility, isActive: isActive, color: color)
+            return VisualLandmark(position: position, visibility: landmark.visibility as! Float, isActive: isActive, color: color)
         }
         
         // Сбрасываем прогресс анимации

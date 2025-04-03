@@ -125,7 +125,7 @@ class CameraService: NSObject, CameraServiceProtocol {
         }
         DispatchQueue.main.async { [weak self] in
             previewLayer.frame = frame
-            os_log("CameraService: PreviewLayer обновлён с новым фреймом: %@", log: OSLog.default, type: .debug, String(describing: frame)) // Заменяем NSStringFromCGRect
+            os_log("CameraService: PreviewLayer обновлён с новым фреймом: %@", log: OSLog.default, type: .debug, NSStringFromCGRect(frame))
         }
     }
 }

@@ -1,202 +1,106 @@
-import MediaPipeTasksVision
-import os.log
+import Foundation
 
-// MARK: - Типы упражнений
-enum ExerciseType: String {
-    case squat = "repetitive" // Приседания
-    case pushUp = "pushUp"    // Отжимания
-    // Можно добавить другие типы упражнений
+// Временная структура Landmark, замените на тип из MediaPipe, если он отличается
+struct Landmark {
+    let x: NSNumber
+    let y: NSNumber
 }
 
-// MARK: - Ошибки выполнения упражнения
-enum ExerciseFeedback: String {
-    case none = ""
-    case kneesTooFarForward = "Не выводите колени вперёд"
-    case backNotStraight = "Держите спину прямо"
-    case elbowsNotLocked = "Выпрямите локти"
-}
-
-// MARK: - Протокол для обработки упражнений
-protocol ExerciseAnalyzer {
-    func analyze(landmarks: [NormalizedLandmark]) -> (completedRep: Bool, feedback: ExerciseFeedback)
-    func reset()
-}
-
-// MARK: - Анализатор приседаний
-class SquatAnalyzer: ExerciseAnalyzer {
-    private var isGoingDown: Bool = false
-    private var previousHipY: Float?
-    private let hipThreshold: Float = 0.05 // Порог изменения Y-координаты таза для фиксации движения
-    
-    func analyze(landmarks: [NormalizedLandmark]) -> (completedRep: Bool, feedback: ExerciseFeedback) {
-        // Лендмарки: 23 (левый таз), 25 (левое колено), 27 (левая лодыжка), 11 (левое плечо), 12 (правое плечо)
-        let leftHip = landmarks[23]
-        let leftKnee = landmarks[25]
-        let leftAnkle = landmarks[27]
-        let leftShoulder = landmarks[11]
-        let rightShoulder = landmarks[12]
-        
-        // 1. Проверка корректности осанки (угол спины)
-        let backAngle = calculateAngle(point1: leftShoulder, point2: leftHip, point3: leftKnee)
-        let backFeedback: ExerciseFeedback = backAngle > 30 ? .backNotStraight : .none
-        
-        // 2. Проверка положения коленей (не должны быть слишком далеко вперёд)
-        let kneeOverAnkleDistance = abs(leftKnee.x - leftAnkle.x)
-        let kneeFeedback: ExerciseFeedback = kneeOverAnkleDistance > 0.1 ? .kneesTooFarForward : .none
-        
-        // 3. Подсчёт повторений на основе Y-координаты таза
-        let currentHipY = leftHip.y
-        var completedRep = false
-        
-        if let previousHipY = previousHipY {
-            if currentHipY > previousHipY + hipThreshold && !isGoingDown {
-                isGoingDown = true
-                os_log("PoseProcessor: Движение вниз (приседание)", log: OSLog.default, type: .debug)
-            } else if currentHipY < previousHipY - hipThreshold && isGoingDown {
-                isGoingDown = false
-                completedRep = true
-                os_log("PoseProcessor: Повторение зафиксировано (приседание)", log: OSLog.default, type: .debug)
-            }
-        }
-        
-        self.previousHipY = currentHipY
-        
-        // Возвращаем результат анализа
-        let feedback: ExerciseFeedback = backFeedback != .none ? backFeedback : kneeFeedback
-        return (completedRep, feedback)
-    }
-    
-    func reset() {
-        isGoingDown = false
-        previousHipY = nil
-    }
-}
-
-// MARK: - Анализатор отжиманий
-class PushUpAnalyzer: ExerciseAnalyzer {
-    private var isGoingDown: Bool = false
-    private var previousElbowAngle: Float?
-    private let elbowAngleThreshold: Float = 90 // Порог угла локтя для фиксации отжимания
-    
-    func analyze(landmarks: [NormalizedLandmark]) -> (completedRep: Bool, feedback: ExerciseFeedback) {
-        // Лендмарки: 13 (левый локоть), 11 (левое плечо), 15 (левое запястье), 12 (правое плечо), 24 (правый таз)
-        let leftElbow = landmarks[13]
-        let leftShoulder = landmarks[11]
-        let leftWrist = landmarks[15]
-        let rightShoulder = landmarks[12]
-        let rightHip = landmarks[24]
-        
-        // 1. Проверка корректности осанки (угол спины)
-        let backAngle = calculateAngle(point1: rightShoulder, point2: rightHip, point3: rightShoulder)
-        let backFeedback: ExerciseFeedback = backAngle > 20 ? .backNotStraight : .none
-        
-        // 2. Проверка угла локтя
-        let elbowAngle = calculateAngle(point1: leftShoulder, point2: leftElbow, point3: leftWrist)
-        let elbowFeedback: ExerciseFeedback = elbowAngle > 160 && !isGoingDown ? .elbowsNotLocked : .none
-        
-        // 3. Подсчёт повторений на основе угла локтя
-        var completedRep = false
-        
-        if let previousElbowAngle = previousElbowAngle {
-            if elbowAngle < elbowAngleThreshold && !isGoingDown {
-                isGoingDown = true
-                os_log("PoseProcessor: Движение вниз (отжимание)", log: OSLog.default, type: .debug)
-            } else if elbowAngle > 160 && isGoingDown {
-                isGoingDown = false
-                completedRep = true
-                os_log("PoseProcessor: Повторение зафиксировано (отжимание)", log: OSLog.default, type: .debug)
-            }
-        }
-        
-        self.previousElbowAngle = elbowAngle
-        
-        // Возвращаем результат анализа
-        let feedback: ExerciseFeedback = backFeedback != .none ? backFeedback : elbowFeedback
-        return (completedRep, feedback)
-    }
-    
-    func reset() {
-        isGoingDown = false
-        previousElbowAngle = nil
-    }
-}
-
-// MARK: - Основной класс PoseProcessor
 class PoseProcessor {
-    // MARK: - Свойства
-        private var repCount: Int = 0
-        private var analyzer: ExerciseAnalyzer
-        private var feedback: ExerciseFeedback = .none
-        
-        var onRepCountUpdated: ((Int) -> Void)?
-        var onFeedbackUpdated: ((String) -> Void)?
-        
-        // Публичный геттер для repCount
-        var currentRepCount: Int {
-            return repCount
-        }
+    private var leftShoulderAngle: Double = 0.0
+    private var rightShoulderAngle: Double = 0.0
+    private var leftElbowAngle: Double = 0.0
+    private var rightElbowAngle: Double = 0.0
+    private var leftHipAngle: Double = 0.0
+    private var rightHipAngle: Double = 0.0
+    private var leftKneeAngle: Double = 0.0
+    private var rightKneeAngle: Double = 0.0
     
-    // MARK: - Инициализация
-    init(exerciseType: ExerciseType = .squat) {
-        switch exerciseType {
-        case .squat:
-            self.analyzer = SquatAnalyzer()
-        case .pushUp:
-            self.analyzer = PushUpAnalyzer()
-        }
-    }
-    
-    // MARK: - Обработка позы
-    func processPoseLandmarks(_ result: PoseLandmarkerResult) {
-        os_log("PoseProcessor: processPoseLandmarks вызван", log: OSLog.default, type: .debug)
-        
-        guard let landmarks = result.landmarks.first else {
-            os_log("PoseProcessor: Лендмарки отсутствуют", log: OSLog.default, type: .debug)
-            feedback = .none
-            onFeedbackUpdated?(feedback.rawValue)
-            return
-        }
-        
-        // Анализируем позу
-        let (completedRep, newFeedback) = analyzer.analyze(landmarks: landmarks)
-        
-        // Обновляем количество повторений
-        if completedRep {
-            repCount += 1
-            onRepCountUpdated?(repCount)
-            os_log("PoseProcessor: Повторение зафиксировано, общее количество: %d", log: OSLog.default, type: .debug, repCount)
-        }
-        
-        // Обновляем обратную связь
-        if feedback != newFeedback {
-            feedback = newFeedback
-            onFeedbackUpdated?(feedback.rawValue)
-            os_log("PoseProcessor: Обновлена обратная связь: %@", log: OSLog.default, type: .debug, feedback.rawValue)
-        }
-    }
-    
-    // MARK: - Сброс состояния
-    func reset() {
-        repCount = 0
-        feedback = .none
-        analyzer.reset()
-        onRepCountUpdated?(repCount)
-        onFeedbackUpdated?(feedback.rawValue)
-    }
-    
-    // MARK: - Вспомогательные методы
-    private func calculateAngle(point1: NormalizedLandmark, point2: NormalizedLandmark, point3: NormalizedLandmark) -> Float {
-        let vector1 = (x: point1.x - point2.x, y: point1.y - point2.y)
-        let vector2 = (x: point3.x - point2.x, y: point3.y - point2.y)
+    /// Вычисляет угол между тремя точками в градусах
+    private func calculateAngle(point1: Landmark, point2: Landmark, point3: Landmark) -> Double {
+        let vector1 = (x: Double(truncating: point1.x) - Double(truncating: point2.x),
+                       y: Double(truncating: point1.y) - Double(truncating: point2.y))
+        let vector2 = (x: Double(truncating: point3.x) - Double(truncating: point2.x),
+                       y: Double(truncating: point3.y) - Double(truncating: point2.y))
         
         let dotProduct = vector1.x * vector2.x + vector1.y * vector2.y
         let magnitude1 = sqrt(vector1.x * vector1.x + vector1.y * vector1.y)
         let magnitude2 = sqrt(vector2.x * vector2.x + vector2.y * vector2.y)
         
-        guard magnitude1 > 0, magnitude2 > 0 else { return 0 }
+        guard magnitude1 > 0, magnitude2 > 0 else { return 0.0 }
         
         let cosTheta = dotProduct / (magnitude1 * magnitude2)
-        let angleRad = acos(min(max(cosTheta, -1), 1))
-        return angleRad * 180 / .pi // Переводим в градусы
+        let angleRadians = acos(min(max(cosTheta, -1.0), 1.0))
+        return angleRadians * 180 / .pi
+    }
+    
+    /// Обрабатывает массив ключевых точек и вычисляет углы
+    func processPose(landmarks: [Landmark]) {
+        guard landmarks.count >= 33 else { return }
+        
+        let leftShoulder = landmarks[11]  // Left shoulder
+        let rightShoulder = landmarks[12] // Right shoulder
+        let leftElbow = landmarks[13]     // Left elbow
+        let rightElbow = landmarks[14]    // Right elbow
+        let leftWrist = landmarks[15]     // Left wrist
+        let rightWrist = landmarks[16]    // Right wrist
+        let leftHip = landmarks[23]       // Left hip
+        let rightHip = landmarks[24]      // Right hip
+        let leftKnee = landmarks[25]      // Left knee
+        let rightKnee = landmarks[26]     // Right knee
+        let leftAnkle = landmarks[27]     // Left ankle
+        let rightAnkle = landmarks[28]    // Right ankle
+        
+        leftShoulderAngle = calculateAngle(point1: leftElbow, point2: leftShoulder, point3: leftHip)
+        rightShoulderAngle = calculateAngle(point1: rightElbow, point2: rightShoulder, point3: rightHip)
+        leftElbowAngle = calculateAngle(point1: leftShoulder, point2: leftElbow, point3: leftWrist)
+        rightElbowAngle = calculateAngle(point1: rightShoulder, point2: rightElbow, point3: rightWrist)
+        leftHipAngle = calculateAngle(point1: leftShoulder, point2: leftHip, point3: leftKnee)
+        rightHipAngle = calculateAngle(point1: rightShoulder, point2: rightHip, point3: rightKnee)
+        leftKneeAngle = calculateAngle(point1: leftHip, point2: leftKnee, point3: leftAnkle)
+        rightKneeAngle = calculateAngle(point1: rightHip, point2: rightKnee, point3: rightAnkle)
+    }
+    
+    /// Оценивает общую форму тела
+    func evaluatePose() -> String {
+        var feedback = ""
+        
+        if leftShoulderAngle > 90 || rightShoulderAngle > 90 {
+            feedback += "Lower your shoulders. "
+        }
+        
+        if leftElbowAngle < 70 || rightElbowAngle < 70 {
+            feedback += "Bend your elbows more. "
+        }
+        
+        if leftHipAngle < 90 || rightHipAngle < 90 {
+            feedback += "Bend at the hips more. "
+        }
+        
+        if leftKneeAngle < 90 || rightKneeAngle < 90 {
+            feedback += "Bend your knees more. "
+        }
+        
+        return feedback.isEmpty ? "Good form!" : feedback
+    }
+    
+    /// Оценивает форму тела для отжиманий
+    func evaluatePushUpPose() -> String {
+        var feedback = ""
+        
+        if leftShoulderAngle > 100 || rightShoulderAngle > 100 {
+            feedback += "Lower your shoulders. "
+        }
+        
+        if leftElbowAngle < 90 || rightElbowAngle < 90 {
+            feedback += "Bend your elbows more. "
+        }
+        
+        if calculateAngle(point1: leftShoulder, point2: leftHip, point3: leftKnee) < 160 ||
+           calculateAngle(point1: rightShoulder, point2: rightHip, point3: rightKnee) < 160 {
+            feedback += "Keep your body straight. "
+        }
+        
+        return feedback.isEmpty ? "Good push-up form!" : feedback
     }
 }
